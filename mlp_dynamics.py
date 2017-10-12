@@ -26,12 +26,24 @@ class MlpDynamics(object):
             last_out = activation(U.dense(last_out, hid_size, "dynfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
         self.prediction = U.dense(last_out, ob_space.shape[0], "dynfinal%i"%(i+1), weight_init=U.normc_initializer(1.0))
 
+        #TODO: Get jacobian by slicing
+        #self.Jac = tf.gradients(self.prediction,self.state_in,name="Jacobian")[0];
+        self.Jac = tf.stack([tf.gradients(y, self.state_in)[0] for y in tf.unstack(self.prediction, axis=1)],axis=2)
+        
         self.n_step = U.function([self.state_in], [self.prediction])
+        self.Jacobian = U.function([self.state_in], [self.Jac])
 
     def step(self, ob):
         return self.n_step(ob[None])
     def get_architecture(self):
         return self.hid_size,self.num_hid_layers,self.activation
-
+    def get_Jacobian(self, state):
+        if(state.ndim == 1):
+            return self.Jacobian(state[None])
+        elif(state.ndim == 2):
+            return self.Jacobian(state)
+        else:
+            print("Wrong Input State. Should be (n,) or (m,n)")
+            
 
 

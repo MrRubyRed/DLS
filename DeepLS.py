@@ -14,7 +14,7 @@ picklefile = "/home/vrubies/Research/baselines/baselines/trpo_mpi/experiments/ex
 policy,env = Utils.load_policy_and_env_from_pickle(sess,picklefile)
 
 # PARAMETERS for learning the dynamics
-architecture = {"hid_size":32,"num_hid_layers":2,"activation":tf.nn.relu}
+architecture = {"hid_size":20,"num_hid_layers":2,"activation":tf.nn.relu}
 optimizer = tf.train.MomentumOptimizer
 loss_func = tf.losses.mean_squared_error
 total_grad_steps=1000
@@ -30,6 +30,7 @@ dynamics = Utils.learn_dynamics_model(sess,env,policy,architecture,optimizer,los
 obs = env.reset()
 policy.act(True,obs)
 
+#dynamics.get_Jacobian(obs);
 
 
 

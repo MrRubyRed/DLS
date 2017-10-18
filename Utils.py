@@ -15,22 +15,24 @@ def get_activation(activation):
         return tf.nn.sigmoid
     
 def collect_traj(env,policy,episodes,traj_len):
-    data = [];
-    target = [];
-    obs = env.reset();
+    observations = []
+    actions = []
+    target = []
+    obs = env.reset()
     for i in range(episodes):
         for j in range(traj_len):
             action,predval = policy.act(False,obs)
             n_obs,rew,reset,info = env.step(action)
-            data.append(np.concatenate([obs,action]))
+            observations.append(obs)
+            actions.append(action)
             target.append(n_obs)
             if(reset):
                 obs = env.reset()
             else:
-                obs = n_obs;
-        obs = env.reset();
+                obs = n_obs
+        obs = env.reset()
     
-    return np.array(data),np.array(target)
+    return np.array(observations),np.array(actions),np.array(target)
         
                 
 # =============================================================================
@@ -122,15 +124,15 @@ def learn_dynamics_model(sess,                  #tensorflow sess
     sess.run(loss_opt_init)
     
     #Collect data for training and testing
-    data,target = collect_traj(env,policy,episodes,traj_len)
-    v_da,v_targ = collect_traj(env,policy,episodes//2,traj_len)
+    data1,data2,target = collect_traj(env,policy,episodes,traj_len)
+    v_da1,v_da2,v_targ = collect_traj(env,policy,episodes//2,traj_len)
     
     #Learn the dynamical system
     for i in range(total_grad_steps):
-        tmp = np.random.randint(len(data), size=batch_size)
-        l,_ = sess.run([loss,grad_step],{dynamics.state_in:data[tmp],dynamics.state_next:target[tmp]})
+        tmp = np.random.randint(len(data1), size=batch_size)
+        l,_ = sess.run([loss,grad_step],{dynamics.state_in:data1[tmp],dynamics.action_in:data2[tmp],dynamics.state_next:target[tmp]})
         if(np.mod(i,20) == 0):
-            val_loss = sess.run(loss,{dynamics.state_in:v_da,dynamics.state_next:v_targ})
+            val_loss = sess.run(loss,{dynamics.state_in:v_da1,dynamics.action_in:v_da2,dynamics.state_next:v_targ})
             print("Loss = " + str(l) + " || Validation = " + str(val_loss))
             
     return dynamics

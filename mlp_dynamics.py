@@ -3,6 +3,7 @@ import baselines.common.tf_util as U
 import tensorflow as tf
 import gym
 from baselines.common.distributions import make_pdtype
+import numpy as np
 
 class MlpDynamics(object):
 
@@ -30,13 +31,13 @@ class MlpDynamics(object):
 
         #TODO: Get jacobian by slicing
         #self.Jac = tf.gradients(self.prediction,self.state_in,name="Jacobian")[0];
-        self.Jac = tf.stack([tf.gradients(y, self.state_in)[0] for y in tf.unstack(self.prediction, axis=1)],axis=2)
+        self.Jac = tf.stack([tf.gradients(y, self.merge_in)[0] for y in tf.unstack(self.prediction, axis=1)],axis=2)
         
-        self.n_step = U.function([self.state_in], [self.prediction])
-        self.Jacobian = U.function([self.state_in], [self.Jac])
+        self.n_step = U.function([self.state_in,self.action_in], [self.prediction])
+        self.Jacobian = U.function([self.state_in,self.action_in], [self.Jac])
 
-    def step(self, ob):
-        return self.n_step(ob[None])
+    def step(self, ob, act):
+        return self.n_step(ob[None],act[None])
     def get_architecture(self):
         return self.hid_size,self.num_hid_layers,self.activation
     def get_Jacobian(self, state):

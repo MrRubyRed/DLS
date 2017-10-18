@@ -22,7 +22,7 @@ def collect_traj(env,policy,episodes,traj_len):
         for j in range(traj_len):
             action,predval = policy.act(False,obs)
             n_obs,rew,reset,info = env.step(action)
-            data.append(obs)
+            data.append(np.concatenate([obs,action]))
             target.append(n_obs)
             if(reset):
                 obs = env.reset()
@@ -101,7 +101,7 @@ def learn_dynamics_model(sess,                  #tensorflow sess
     num_hid_layers = architecture["num_hid_layers"]
     activation = architecture["activation"]
     
-    dynamics = MlpDynamics(name="dyn", ob_space=env.observation_space, hid_size=hid_size,num_hid_layers=num_hid_layers, activation=activation)
+    dynamics = MlpDynamics(name="dyn", ob_space=env.observation_space, ac_space=env.action_space, hid_size=hid_size,num_hid_layers=num_hid_layers, activation=activation)
 
     #Initialize variables in "dyn" scope
     dyn_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='dyn')
@@ -137,7 +137,7 @@ def learn_dynamics_model(sess,                  #tensorflow sess
 
 # =============================================================================
             
-#TODO: Implement function to collect hyperplanes induced by piecewise linear dynamics
+#TODO: Check with crafted system
 def bisection_hyperplane_finder(dynamics,				#dynamics object
 					  			env,					#gym envirnoment object
 					  			hyperP_list,

@@ -11,7 +11,7 @@ class MlpDynamics(object):
             self._init(*args, **kwargs)
             self.scope = tf.get_variable_scope().name
     
-    def _init(self, ob_space, hid_size, num_hid_layers, activation=tf.nn.tanh):
+    def _init(self, ob_space, ac_space, hid_size, num_hid_layers, activation=tf.nn.tanh): #Decouple Action and State
 
         self.hid_size = hid_size;
         self.num_hid_layers = num_hid_layers;
@@ -19,9 +19,11 @@ class MlpDynamics(object):
         self.activation = str(activation);
 
         self.state_in = U.get_placeholder(name="state_in", dtype=tf.float32, shape=[None] + list(ob_space.shape))
+        self.action_in = U.get_placeholder(name="action_in", dtype=tf.float32, shape=[None] + list(ac_space.shape))
+        self.merge_in = tf.concat([self.state_in,self.action_in],axis=1)
         self.state_next = U.get_placeholder(name="state_next", dtype=tf.float32, shape=[None] + list(ob_space.shape))
         
-        last_out = self.state_in
+        last_out = self.merge_in
         for i in range(num_hid_layers):
             last_out = activation(U.dense(last_out, hid_size, "dynfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
         self.prediction = U.dense(last_out, ob_space.shape[0], "dynfinal%i"%(i+1), weight_init=U.normc_initializer(1.0))

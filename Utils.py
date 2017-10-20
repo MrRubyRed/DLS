@@ -140,39 +140,45 @@ def learn_dynamics_model(sess,                  #tensorflow sess
 # =============================================================================
             
 #TODO: Check with crafted system
-def bisection_hyperplane_finder(dynamics,				#dynamics object
-					  			env,					#gym envirnoment object
-					  			hyperP_list,
-					  			points=None,			#tuple of points
-					  			interval_L2=None,
-					  			eps=0.01,				#tolerance
-					  			rec_depth=0):
-	a,b = points
-	c = (b+a)/2.0
-	
-	if(interval_L2 / 2.0**rec_depth < eps):
-		hyperP_list.append(c)
-		return
-	
-	J_a = dynamics.get_Jacobian(a)
-	J_b = dynamics.get_Jacobian(b)
-	J_c = dynamics.get_Jacobian(c)
-	
-	condition1 = (J_a==J_c).all()
-	condition2 = (J_c==J_b).all()
-	
-	if condition1 and condition2:
-		return None					#point a and b are in the same linear region
-	elif condition1 and not condition2:
-		return bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(c,b),
-											interval_L2=interval_L2,eps=eps,rec_depth=rec_depth+1)
-	elif not condition1 and condition2:
-		return bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(a,c),
-											interval_L2=interval_L2,eps=eps,rec_depth=rec_depth+1)
-	elif not condition1 and not condition2:
-		new_norm1 = np.linalg.norm(c-a)
-		bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(a,c),
-									interval_L2=new_norm1,eps=eps,rec_depth=0)
-		new_norm2 = np.linalg.norm(b-c)									
-		bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(c,b),
-									interval_L2=new_norm2,eps=eps,rec_depth=0)
+def bisection_hyperplane_finder(dynamics,                #dynamics object
+                                  env,                    #gym envirnoment object
+                                  hyperP_list,
+                                  points=None,            #tuple of points
+                                  interval_L2=None,
+                                  eps=0.01,                #tolerance
+                                  rec_depth=0):
+    a,b = points
+    c = (b+a)/2.0
+    
+    J_a = dynamics.get_Jacobian(a)
+    J_b = dynamics.get_Jacobian(b)
+    J_c = dynamics.get_Jacobian(c)
+    
+    condition1 = (J_a==J_c).all()
+    condition2 = (J_c==J_b).all()
+    
+    if(interval_L2 / 2.0**rec_depth < eps):
+        if condition1 != condition2:
+            hyperP_list.append(c)
+            return
+        else:
+            return
+    
+    if condition1 and condition2:
+        bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(a,c),
+                                    interval_L2=interval_L2,eps=eps,rec_depth=rec_depth+1)                    
+        bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(c,b),
+                                    interval_L2=interval_L2,eps=eps,rec_depth=rec_depth+1)
+    elif condition1 and not condition2:
+        return bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(c,b),
+                                            interval_L2=interval_L2,eps=eps,rec_depth=rec_depth+1)
+    elif not condition1 and condition2:
+        return bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(a,c),
+                                            interval_L2=interval_L2,eps=eps,rec_depth=rec_depth+1)
+    elif not condition1 and not condition2:
+        new_norm1 = np.linalg.norm(c-a)
+        bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(a,c),
+                                    interval_L2=new_norm1,eps=eps,rec_depth=0)
+        new_norm2 = np.linalg.norm(b-c)                                    
+        bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(c,b),
+                                    interval_L2=new_norm2,eps=eps,rec_depth=0)

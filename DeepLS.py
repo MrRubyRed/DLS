@@ -25,13 +25,18 @@ l_rate=0.01
 momentum=0.95
 
 #Learn dynamics model of autonomous system
-dynamics = Utils.learn_dynamics_model(sess,env,policy,architecture,optimizer,loss_func,total_grad_steps,traj_len,episodes,batch_size,l_rate,momentum)
+#dynamics = Utils.learn_dynamics_model(sess,env,policy,architecture,optimizer,loss_func,total_grad_steps,traj_len,episodes,batch_size,l_rate,momentum)
 
-obs = env.reset()
-policy.act(True,obs)
+#obs = env.reset()
+#policy.act(True,obs)
 
 #dynamics.get_Jacobian(obs);
-
-
-
-
+import mlp_dynamics
+boundary_list = [(np.array([1.0,0.0]),0.0),(np.array([0.0,1.0]),0.0)]
+matrix_list = [np.array([[2.0,-1.0],[-1.0,2.0]]),np.array([[2.0,1.0],[1.0,2.0]]),np.array([[2.0,1.0],[1.0,2.0]]),np.array([[2.0,-1.0],[-1.0,2.0]])]
+dynamics2 = mlp_dynamics.Test_PieceWise_Linear_Dynamics(boundary_list,matrix_list)
+a = np.array([0.1,0.1])
+b = np.array([-0.1,-0.1])
+interval_L2 = np.linalg.norm(a-b)
+hyperP_list = []
+Utils.bisection_hyperplane_finder(dynamics2,env,hyperP_list=hyperP_list,points=(a,b),interval_L2=interval_L2,eps=0.01)

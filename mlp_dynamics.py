@@ -3,6 +3,8 @@ import baselines.common.tf_util as U
 import tensorflow as tf
 import gym
 from baselines.common.distributions import make_pdtype
+import numpy as np
+import itertools
 
 class MlpDynamics(object):
 
@@ -30,13 +32,13 @@ class MlpDynamics(object):
 
         #TODO: Get jacobian by slicing
         #self.Jac = tf.gradients(self.prediction,self.state_in,name="Jacobian")[0];
-        self.Jac = tf.stack([tf.gradients(y, self.state_in)[0] for y in tf.unstack(self.prediction, axis=1)],axis=2)
+        self.Jac = tf.stack([tf.gradients(y, self.merge_in)[0] for y in tf.unstack(self.prediction, axis=1)],axis=2)
         
-        self.n_step = U.function([self.state_in], [self.prediction])
-        self.Jacobian = U.function([self.state_in], [self.Jac])
+        self.n_step = U.function([self.state_in,self.action_in], [self.prediction])
+        self.Jacobian = U.function([self.state_in,self.action_in], [self.Jac])
 
-    def step(self, ob):
-        return self.n_step(ob[None])
+    def step(self, ob, act):
+        return self.n_step(ob[None],act[None])
     def get_architecture(self):
         return self.hid_size,self.num_hid_layers,self.activation
     def get_Jacobian(self, state):
@@ -47,5 +49,28 @@ class MlpDynamics(object):
         else:
             print("Wrong Input State. Should be (n,) or (m,n)")
             
-
+class Test_PieceWise_Linear_Dynamics(object):
+    
+    def __init__(self,boundary_list,matrix_list):
+        self.boundary_list = boundary_list
+        self.matrix_list = matrix_list
+        self.region_id = list(itertools.product([-1,1],repeat=len(self.boundary_list)))
+        
+    def step(self, ob):
+        pass
+    
+    def get_Jacobian(self, state):
+        region_id = []
+        for normal,bias in self.boundary_list:
+            if(np.inner(state,normal) - bias <= 0.0):
+                region_id.append(-1)
+            elif(np.inner(state,normal) - bias > 0.0):
+                region_id.append(1)
+        region_id = tuple(region_id)
+        return self.get_MatfromID(region_id)
+        
+        
+    def get_MatfromID(self,region_id):        
+        indx = self.region_id.index(region_id)
+        return self.matrix_list[indx]
 

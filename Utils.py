@@ -142,7 +142,8 @@ def learn_dynamics_model(sess,                  #tensorflow sess
                          traj_len=100,          #trajectory length
                          episodes=20,           #number of episodes
                          batch_size=10,         #batch size
-                         l_rate=0.1,            #learning ratw
+                         l_rate=0.1,            #learning rate
+                         withInput=False,       #learn dynamics with input
                          mom=0.95):             #momentum
     
     from mlp_dynamics import MlpDynamics
@@ -152,7 +153,8 @@ def learn_dynamics_model(sess,                  #tensorflow sess
     num_hid_layers = architecture["num_hid_layers"]
     activation = architecture["activation"]
     
-    dynamics = MlpDynamics(name="dyn", ob_space=env.observation_space, ac_space=env.action_space, hid_size=hid_size,num_hid_layers=num_hid_layers, activation=activation)
+    dynamics = MlpDynamics(name="dyn", ob_space=env.observation_space, ac_space=env.action_space, 
+                           hid_size=hid_size,num_hid_layers=num_hid_layers, activation=activation,withInput=withInput)
 
     #Initialize variables in "dyn" scope
     dyn_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='dyn')
@@ -179,55 +181,121 @@ def learn_dynamics_model(sess,                  #tensorflow sess
     #Learn the dynamical system
     for i in range(total_grad_steps):
         tmp = np.random.randint(len(data1), size=batch_size)
-        l,_ = sess.run([loss,grad_step],{dynamics.state_in:data1[tmp],dynamics.action_in:data2[tmp],dynamics.state_next:target[tmp]})
-        if(np.mod(i,20) == 0):
-            val_loss = sess.run(loss,{dynamics.state_in:v_da1,dynamics.action_in:v_da2,dynamics.state_next:v_targ})
-            print("Loss = " + str(l) + " || Validation = " + str(val_loss))
-            
+        if withInput:
+            l,_ = sess.run([loss,grad_step],{dynamics.state_in:data1[tmp],dynamics.action_in:data2[tmp],dynamics.state_next:target[tmp]})
+            if(np.mod(i,20) == 0):
+                val_loss = sess.run(loss,{dynamics.state_in:v_da1,dynamics.action_in:v_da2,dynamics.state_next:v_targ})
+                print("Loss = " + str(l) + " || Validation = " + str(val_loss))
+        else:
+            l,_ = sess.run([loss,grad_step],{dynamics.state_in:data1[tmp],dynamics.state_next:target[tmp]})
+            if(np.mod(i,20) == 0):
+                val_loss = sess.run(loss,{dynamics.state_in:v_da1,dynamics.state_next:v_targ})
+                print("Loss = " + str(l) + " || Validation = " + str(val_loss))            
+                
     return dynamics
 
 # =============================================================================
             
-#TODO: Check with crafted system
-def bisection_hyperplane_finder(dynamics,                #dynamics object
-                                  env,                    #gym envirnoment object
-                                  hyperP_list,
-                                  points=None,            #tuple of points
-                                  interval_L2=None,
-                                  eps=0.01,                #tolerance
-                                  rec_depth=0):
+#This function finds the points lying in the separatig hyperplanes of the piecewise
+#linear system between two points a and b representing states.
+def bisection_point_finder(dynamics,                #dynamics object
+                           env,                     #gym envirnoment object
+                           hyperP_list,             #list to be filled with hyperplane points
+                           points=None,             #tuple of points
+                           interval_L2=None,
+                           eps=0.01,                #tolerance
+                           rec_depth=0):            #recurrence depth
     a,b = points
     c = (b+a)/2.0
     
-    J_a = dynamics.get_Jacobian(a)
-    J_b = dynamics.get_Jacobian(b)
-    J_c = dynamics.get_Jacobian(c)
+    J_a = dynamics.get_Jacobian(a)[0]
+    J_b = dynamics.get_Jacobian(b)[0]
+    J_c = dynamics.get_Jacobian(c)[0]
     
     condition1 = (J_a==J_c).all()
     condition2 = (J_c==J_b).all()
     
     if(interval_L2 / 2.0**rec_depth < eps):
         if condition1 != condition2:
-            hyperP_list.append(c)
+            hyperP_list.append((c,J_a,J_b))
             return
         else:
             return
     
     if condition1 and condition2:
-        bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(a,c),
+        bisection_point_finder(dynamics,env,hyperP_list,points=(a,c),
                                     interval_L2=interval_L2,eps=eps,rec_depth=rec_depth+1)                    
-        bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(c,b),
+        bisection_point_finder(dynamics,env,hyperP_list,points=(c,b),
                                     interval_L2=interval_L2,eps=eps,rec_depth=rec_depth+1)
     elif condition1 and not condition2:
-        return bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(c,b),
+        return bisection_point_finder(dynamics,env,hyperP_list,points=(c,b),
                                             interval_L2=interval_L2,eps=eps,rec_depth=rec_depth+1)
     elif not condition1 and condition2:
-        return bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(a,c),
+        return bisection_point_finder(dynamics,env,hyperP_list,points=(a,c),
                                             interval_L2=interval_L2,eps=eps,rec_depth=rec_depth+1)
     elif not condition1 and not condition2:
         new_norm1 = np.linalg.norm(c-a)
-        bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(a,c),
+        bisection_point_finder(dynamics,env,hyperP_list,points=(a,c),
                                     interval_L2=new_norm1,eps=eps,rec_depth=0)
         new_norm2 = np.linalg.norm(b-c)                                    
-        bisection_hyperplane_finder(dynamics,env,hyperP_list,points=(c,b),
+        bisection_point_finder(dynamics,env,hyperP_list,points=(c,b),
                                     interval_L2=new_norm2,eps=eps,rec_depth=0)
+
+# Function to update points belonging to a hyperplane
+def update_point_dict(dictionary,
+                      hyperP_list):
+    
+    for p,Ja,Jb in hyperP_list:
+        if (tuple(Ja.flatten()),tuple(Jb.flatten())) in dictionary:
+            dictionary[(tuple(Ja.flatten()),tuple(Jb.flatten()))].append(p)
+        elif (tuple(Jb.flatten()),tuple(Ja.flatten())) in dictionary:
+            dictionary[(tuple(Jb.flatten()),tuple(Ja.flatten()))].append(p)
+        else:
+            dictionary[(tuple(Ja.flatten()),tuple(Jb.flatten()))] = [p]
+            
+    return dictionary
+            
+#Function that constructs all hyperplanes between two points a and b. 
+def hyperplane_construction(dynamics,
+                            env,
+                            points=None,
+                            extra_points=0,
+                            eps=0.01,
+                            per_param=0.05):
+    #Minimum number of points to construct hyper plane equal to number of dims
+    min_points = dynamics.ob_space
+    a,b = points
+    interval_L2 = np.linalg.norm(a-b)
+    hyperP_list = []
+    bisection_point_finder(dynamics,env,hyperP_list=hyperP_list,points=(a,b),interval_L2=interval_L2,eps=eps)
+    check = [(p[1],p[2]) for p in hyperP_list]
+    r = range(len(hyperP_list))
+    point_dict = {indx:[p[0]] for indx,p in zip(r,hyperP_list)}
+    i = 0
+    while i < (min_points + extra_points - 1):
+        hyperP_list = []
+        perturb = np.random.randn(dynamics.ob_space)*per_param
+        a_ = a + perturb
+        b_ = b + perturb
+        bisection_point_finder(dynamics,env,hyperP_list=hyperP_list,points=(a_,b_),interval_L2=interval_L2,eps=eps)
+        new_check = [(p[1],p[2]) for p in hyperP_list]
+        if(np.array_equal(np.array(new_check),np.array(check))):
+            i += 1
+            for indx,p in zip(r,hyperP_list): point_dict[indx].append(p[0])
+    list_normals = []
+    list_biases = []
+    for i in range(len(point_dict)):
+        A = np.array(point_dict[i])
+        mean = np.mean(A,axis=0)
+        A = A - mean
+        _,_,D=np.linalg.svd(np.matmul(A.T,A))
+        normal = D[-1,:]
+        normal = normal/(np.linalg.norm(normal)+0.00001)
+        list_normals.append(normal)
+        list_biases.append(np.inner(normal,mean))
+    return list_normals,list_biases
+            
+        
+    
+    
+        

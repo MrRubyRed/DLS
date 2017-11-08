@@ -3,8 +3,57 @@ import pickle
 import tensorflow as tf
 import gym
 import numpy as np
+import cvxopt as cvx
 
 # AUXILIARY FUNCTIONS =========================================================
+
+def point_induced_hyperP(list_W,list_b,point):
+    D = [np.diag(np.ones(len(point)))]
+    C = []
+    b = []
+    y = point
+    for k in range(len(list_W)-1):
+        y = np.matmul(D[-1],y)
+        y = np.matmul(list_W[k],y) + list_b[k]
+        bool_y = (y >= 0)
+        D_tmp = np.diag(np.array([int(tmp) for tmp in bool_y]))
+        D.append(D_tmp)
+    for k in range(len(list_W)):
+        C.append(np.diag(np.ones(list_W[0].shape[0])))
+        for i in range(k+1):
+            tmp = np.matmul(list_W[i],D[i])
+            C[-1] = np.matmul(tmp,C[-1])
+
+    tmp = np.zeros((D[0].shape[0],1))
+    for k in range(len(list_W)):
+        tmp = list_b[k] + np.matmul(np.matmul(list_W[k],D[k]),tmp) 
+        b.append(tmp)                   
+            
+    return D,C,b
+    
+def get_region(list_W,list_b,point):
+    _,C,b = point_induced_hyperP(list_W,list_b,point)
+    big_C = np.concatenate(C,axis=0)
+    big_b = np.concatenate(b,axis=0)
+    tmp = (np.matmul(big_C,point) + big_b <= 0)
+    diag = np.diag(np.array([int(i) for i in tmp])*2 - 1)
+    
+    big_C = np.matmul(diag,big_C).T
+    big_b = np.matmul(diag,big_b).T
+    num_c = len(big_C)    
+
+    onoff = []
+    G = cvx.matrix(big_C)
+    h = cvx.matrix(-big_b)
+    for k in range(num_c):
+        c = cvx.matrix(-big_C[:,k])
+        sol = cvx.solvers.lp(c, G, h)
+        if(-sol["primal objective"] == 0):
+            onoff.append(True)
+        else:
+            onoff.append(False)
+        
+    
 
 def get_activation(activation):
     if(activation.find("relu") >= 0):

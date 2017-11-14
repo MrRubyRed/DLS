@@ -25,34 +25,63 @@ l_rate=0.01
 momentum=0.95
 
 #Learn dynamics model of autonomous system
-dynamics = Utils.learn_dynamics_model(sess,env,policy,architecture,optimizer,loss_func,total_grad_steps,
-                                      traj_len,episodes,batch_size,l_rate,False,momentum)
+#dynamics = Utils.learn_dynamics_model(sess,env,policy,architecture,optimizer,loss_func,total_grad_steps,
+#                                      traj_len,episodes,batch_size,l_rate,False,momentum)
 
-#obs = env.reset()
-#policy.act(True,obs)
+#Get all weights and biases
+#Wb = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='dyn')
+#list_W = []
+#list_b = []
+#for i in range(len(Wb)):
+#    if i % 2 == 0:
+#        list_W.append(sess.run(Wb[i]).T)
+#    else:
+#        list_b.append(sess.run(Wb[i]).T)
 
-#dynamics.get_Jacobian(obs);
-#letussee = dynamics.get_Jacobian(np.array([0.0,0.0,0.0,0.0]),policy)
-##import mlp_dynamics
+#TODO: Compare regions identified at random vs by following trajectories!
+#stats,_,_ = Utils.collect_traj(env,policy,30,30)
 
-##dim = 4
-#dynamics2 = mlp_dynamics.Test_PieceWise_Linear_Dynamics_Diff(dim)
+#print("Start #1")
+#C_list,b_list = Utils.random_sampling_regions(list_W,list_b,num_points=10000)
+#print("Start #2")
+#C_list_,b_list_ = Utils.traj_sampling_regions(list_W,list_b,env,policy,episodes=500,traj_len=20)
 
-#a = np.random.uniform(-5,5,(dim,))
-#b = np.random.uniform(-5,5,(dim,))
-#normals,biases = Utils.hyperplane_construction(dynamics2,env,points=(a,b),extra_points=10)
+bounds = [(-10.0,10.0),(-10.0,10.0),(-10.0,10.0),(-10.0,10.0)]
+C = []
+b = []
+for i in range(len(bounds)):
+    v = np.zeros((len(bounds),))
+    v[i] = 1.0
+    C.append(v)
+    C.append(-v)
+    low,high = bounds[i]
+    b.append(low)
+    b.append(-high)
+C = np.array(C)
+b = np.array(b)
 
-##point_dict = {}
-##for k in range(1000):
-##    a = np.random.uniform(-5,5,(dim,))
-##    b = np.random.uniform(-5,5,(dim,))
-##    interval_L2 = np.linalg.norm(a-b)
-##    hyperP_list = []
-##    Utils.bisection_point_finder(dynamics,env,hyperP_list=hyperP_list,points=(a,b),interval_L2=interval_L2,eps=0.01)
-##    point_dict = Utils.update_point_dict(point_dict,hyperP_list)
+RegionTree = Utils.Region(C,b,np.zeros((4,1)),0,3)#len(list_W))
+W = np.random.uniform(-3.0,3.0,(10,4))
+b = np.random.uniform(-3.0,3.0,(10,))
+tmp = (b <= 0)
+diag = np.diag(np.array([int(i) for i in tmp])*2 - 1)
+W = np.matmul(diag,W)
+b = np.matmul(diag,b)
+RegionTree.find_children(W,b)
+#colors = []
+#points = []
+#for i in range(10000):
+#
+#    point = np.random.uniform(-2.0,2.0,(4,1))
+#    #point[2:] = 0
+#    j = 0
+#    for C_,b_ in zip(C_list,b_list):
+#        chk = ((np.matmul(C_,point) + b_) < 0)
+#        if chk.all():
+#            points.append(point.T)
+#            colors.append(j)
+#            break
+#        j += 1
 
-#normals,biases = Utils.hyperplane_construction(dynamics2,env,points=(a,b),extra_points=10)
-
-#interval_L2 = np.linalg.norm(a-b)
-#hyperP_list = []
-#Utils.bisection_hyperplane_finder(dynamics2,env,hyperP_list=hyperP_list,points=(a,b),interval_L2=interval_L2,eps=0.01)
+       
+    

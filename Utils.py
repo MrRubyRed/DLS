@@ -5,7 +5,102 @@ import gym
 import numpy as np
 import cvxopt as cvx
 
+class Region(object):
+    
+    def __init__(self,C,b,interior_point,depth,max_depth):
+        self.C = C
+        self.b = b
+        self.children = []
+        self.depth = depth
+        self.max_depth = max_depth
+        self.interior_point = interior_point
+
+    def find_children(self,W,B):
+        W_ = np.concatenate((self.C,W),axis=0)
+        B_ = np.concatenate((self.b,B),axis=0)
+        C,b,inout,interior_point = self.hyperP_filter(W_,B_)
+        if not self.point_check(interior_point,self.depth+1):
+            self.add_child(C,b,interior_point)
+            print("New Child Added! Num. of Children = " + str(len(self.children)))
+        else:
+            #print("Already visited!")
+            return
+        
+        for k in range(len(inout)):
+            if inout[k]:
+                W_tmp = np.copy(W)
+                B_tmp = np.copy(B)
+                W_tmp[[k],:] = -W_tmp[[k],:]
+                B_tmp[k] = -B_tmp[k]
+                self.find_children(W_tmp,B_tmp)
+        
+    def add_child(self,C_child,b_child,interior_point):
+        self.children.append(Region(C_child,b_child,interior_point,self.depth+1,self.max_depth))
+        
+    def point_check(self,point,depth_chk): #checks if a point is in a known region
+        if (self.depth == depth_chk) and ((np.matmul(self.C,point) + self.b[None].T) < 0).all(): #if we reach depth
+            return True
+        elif (self.depth < depth_chk) and ((np.matmul(self.C,point) + self.b[None].T) < 0).all() and (self.children != []):
+            for child in self.children:
+                if child.point_check(point,depth_chk) == True:
+                    return True
+        return False
+
+    def hyperP_filter(self,W,b):
+        num_c = len(W)
+        
+        W = W.astype(np.double)
+        b = b.astype(np.double)
+        
+        lil_W = []
+        lil_b = []
+        inout = []
+        interior_point = []
+        G = cvx.matrix(W)
+        h = cvx.matrix(-b)
+        for k in range(len(self.C),num_c): #skip first entries of W which are super-boundaries
+            c = cvx.matrix(-W[k,:,None])
+            sol = cvx.solvers.lp(c, G, h)
+            sol_ = sol["primal objective"]
+            #print(str(np.abs(sol_ - b[k])))
+            if(sol_ == None):
+                print("Whoops")
+            if(np.abs(sol_ - b[k]) < 1e-5):
+                interior_point.append(np.array(sol["x"]))
+                inout.append(True)
+                lil_W.append(W[k,:])
+                lil_b.append(b[k])
+            else:
+                inout.append(False)
+        
+        interior_point = np.mean(interior_point,axis=0)    
+        return np.array(lil_W),np.array(lil_b),tuple(inout),interior_point
+
+# The region_list list containing tuples of the form ((C,b,ipoint),[...])
+#def get_all_regions(list_W,list_b,bounds,center): #assumes all W are in negative wrt origin position
+#    C = []
+#    b = []
+#    for i in range(len(bounds)):
+#        v = np.zeros((len(bounds),))
+#        v[i] = 1.0
+#        C.append(v)
+#        C.append(-v)
+#        low,high = bounds[i]
+#        b.append(low)
+#        b.append(high)
+#    C = np.array(C)
+#    b = np.array(b)
+#        
+#    RegionTree = Region(C,b,center,0,len(list_W))
+    
+            
+    
+def all_sub_regions_detected(list_W,list_b):
+    pass
+        
 # AUXILIARY FUNCTIONS =========================================================
+
+cvx.solvers.options['show_progress'] = False
 
 def point_induced_hyperP(list_W,list_b,point):
     D = [np.diag(np.ones(len(point)))]
@@ -14,19 +109,19 @@ def point_induced_hyperP(list_W,list_b,point):
     y = point
     for k in range(len(list_W)-1):
         y = np.matmul(D[-1],y)
-        y = np.matmul(list_W[k],y) + list_b[k]
+        y = np.matmul(list_W[k],y) + list_b[k][None].T
         bool_y = (y >= 0)
         D_tmp = np.diag(np.array([int(tmp) for tmp in bool_y]))
         D.append(D_tmp)
     for k in range(len(list_W)):
-        C.append(np.diag(np.ones(list_W[0].shape[0])))
+        C.append(np.diag(np.ones(list_W[0].shape[1])))
         for i in range(k+1):
             tmp = np.matmul(list_W[i],D[i])
             C[-1] = np.matmul(tmp,C[-1])
 
     tmp = np.zeros((D[0].shape[0],1))
     for k in range(len(list_W)):
-        tmp = list_b[k] + np.matmul(np.matmul(list_W[k],D[k]),tmp) 
+        tmp = list_b[k][None].T + np.matmul(np.matmul(list_W[k],D[k]),tmp) 
         b.append(tmp)                   
             
     return D,C,b
@@ -38,23 +133,88 @@ def get_region(list_W,list_b,point):
     tmp = (np.matmul(big_C,point) + big_b <= 0)
     diag = np.diag(np.array([int(i) for i in tmp])*2 - 1)
     
-    big_C = np.matmul(diag,big_C).T
-    big_b = np.matmul(diag,big_b).T
-    num_c = len(big_C)    
+    big_C = np.matmul(diag,big_C)
+    big_b = np.matmul(diag,big_b)  
 
-    onoff = []
-    G = cvx.matrix(big_C)
-    h = cvx.matrix(-big_b)
+    lil_C,lil_b,_,_ = hyperP_filter(big_C,big_b)
+            
+    return lil_C,lil_b
+
+# Given a set of hyperplanes defined by (C,b), this function eliminates redundant
+# constraints of the set {x | Cx + b < 0}
+def hyperP_filter(C,b):
+    num_c = len(C)
+
+    lil_C = []
+    lil_b = []
+    inout = []
+    interior_point = []
+    G = cvx.matrix(C)
+    h = cvx.matrix(-b)
     for k in range(num_c):
-        c = cvx.matrix(-big_C[:,k])
+        c = cvx.matrix(-C[k,:,None])
         sol = cvx.solvers.lp(c, G, h)
-        if(-sol["primal objective"] == 0):
-            onoff.append(True)
+        #print(sol["primal objective"] - big_b[k,0])
+        if(np.abs(sol["primal objective"] - b[k]) < 1e-6):
+            interior_point.append(np.array(sol["x"]))
+            inout.append(True)
+            lil_C.append(C[k,:])
+            lil_b.append(b[k,0])
         else:
-            onoff.append(False)
-        
+            inout.append(False)
     
+    interior_point = np.mean(interior_point,axis=0)    
+    return lil_C,lil_b,inout,interior_point
 
+def random_sampling_regions(list_W,list_b,num_points=1,low=-3.0,high=3.0):
+    C_list = []
+    b_list = []
+    for i in range(num_points):
+        point = np.random.uniform(low,high,(4,1))
+
+        flag = True
+        if len(C_list) > 0:
+            for C_,b_ in zip(C_list,b_list):
+                chk = ((np.matmul(C_,point) + b_) < 0)
+                if chk.all():
+                    flag = False
+                    break
+        
+        if flag:
+            C,b = get_region(list_W,list_b,point)
+            C = np.array(C)
+            b = np.array(b)[None].T
+            C_list.append(C)
+            b_list.append(b)
+            
+    return C_list,b_list
+
+def traj_sampling_regions(list_W,list_b,env,policy,episodes=1,traj_len=1):
+    points,_,_ = collect_traj(env,policy,episodes,traj_len)
+    C_list = []
+    b_list = []
+    for i in range(episodes*traj_len):
+        point = points[i,:,None]
+
+        flag = True
+        if len(C_list) > 0:
+            for C_,b_ in zip(C_list,b_list):
+                chk = ((np.matmul(C_,point) + b_) < 0)
+                if chk.all():
+                    flag = False
+                    break
+        
+        if flag:
+            C,b = get_region(list_W,list_b,point)
+            C = np.array(C)
+            b = np.array(b)[None].T
+            C_list.append(C)
+            b_list.append(b)
+            
+    return C_list,b_list
+
+
+    
 def get_activation(activation):
     if(activation.find("relu") >= 0):
         return tf.nn.relu

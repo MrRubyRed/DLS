@@ -7,26 +7,73 @@ import cvxopt as cvx
 
 class Region(object):
     
-    def __init__(self,C,b,interior_point,depth,max_depth):
+    def __init__(self,C,b,interior_point,depth,max_depth,parent=None,dataW=None,datab=None):
         self.C = C
         self.b = b
-        self.children = []
+        self.parent = parent
         self.depth = depth
-        self.max_depth = max_depth
+        self.max_depth = max_depth #necessary max depth?
         self.interior_point = interior_point
+        self.dataW = dataW
+        self.datab = datab
+        
+        if depth == max_depth:
+            self.M = None
+            self.b_ = None
+        else:
+            self.M,self.b_ = self.get_Mandb_(self.depth)
+        self.children = []
+
+    def get_Mandb_(self,depth):
+        if self.parent == None:
+            return self.dataW[depth],self.datab[depth]
+        else:
+            return self.parent.get_Mandb_(depth)
+
+    def find_family(self,M=None,b=None): #Root should feed M = I, b = np.array([0,0,0..])
+        if(self.depth == self.max_depth):
+            return
+        if(self.depth == 0):
+            D = np.diag(np.ones(self.M.shape[1]))
+            M = np.diag(np.ones(self.M.shape[1]))
+            b = np.zeros((self.M.shape[1],))
+        else:
+            tmp = ((np.matmul(M,self.interior_point) + b[None].T)>=0)
+            D = np.diag(np.array([int(i) for i in tmp]))
+        W_new = np.matmul(np.matmul(self.M,D),M)
+        B_new = (np.matmul(np.matmul(self.M,D),b[None].T).T)[0] + self.b_
+        B_newer = np.matmul(b[None],np.matmul(D,self.M.T))[0] + self.b_
+        #Reorient hyperplanes
+        W_new_,B_new_ = self.reorient_hyper_planes(W_new,B_new,self.interior_point,False)
+        #Pre-Filtering Step to remove redundant hyperplanes outside super boundary interior
+        try:
+            W_,B_ = self.hyperP_Pre_filter(W_new_,B_new_)
+
+            if(W_.size > 0):
+                #Append super boundaries
+                W_ = np.concatenate((self.C,W_),axis=0)
+                B_ = np.concatenate((self.b,B_),axis=0) 
+            else:
+                W_ = np.copy(self.C)
+                B_ = np.copy(self.b)
+        except ValueError:
+            print("Something went wrong")
+        self.find_children(W_,B_)
+        for child in self.children:
+            child.find_family(W_new,B_new)
 
     def find_children(self,W,B):
-        W_ = np.concatenate((self.C,W),axis=0)
-        B_ = np.concatenate((self.b,B),axis=0)
-        C,b,inout,interior_point = self.hyperP_filter(W_,B_)
+        #W_ = np.concatenate((self.C,W),axis=0)
+        #B_ = np.concatenate((self.b,B),axis=0)
+        C,b,inout,interior_point = self.hyperP_filter(W,B)
         if not self.point_check(interior_point,self.depth+1):
             self.add_child(C,b,interior_point)
-            print("New Child Added! Num. of Children = " + str(len(self.children)))
+            print("New Child Added in LEVEL "+str(self.depth)+" ! Num. of Children = " + str(len(self.children)))
         else:
             #print("Already visited!")
             return
         
-        for k in range(len(inout)):
+        for k in range(len(self.C),len(inout)): #check this is correct (skipping super boundaries)
             if inout[k]:
                 W_tmp = np.copy(W)
                 B_tmp = np.copy(B)
@@ -35,16 +82,51 @@ class Region(object):
                 self.find_children(W_tmp,B_tmp)
         
     def add_child(self,C_child,b_child,interior_point):
-        self.children.append(Region(C_child,b_child,interior_point,self.depth+1,self.max_depth))
+        self.children.append(Region(C_child,b_child,interior_point,self.depth+1,self.max_depth,parent=self))
+
+    def reorient_hyper_planes(self,W,B,point,Flag):
+        if Flag:
+            tmp = ((np.matmul(W,point) + B[None].T)>=0)
+        else:
+            tmp = ((np.matmul(W,point) + B[None].T)<0)
+        diag = np.diag(np.array([int(i) for i in tmp])*2 - 1)
+        W = np.matmul(diag,W)
+        B = np.matmul(diag,B)
+        return W,B
         
     def point_check(self,point,depth_chk): #checks if a point is in a known region
-        if (self.depth == depth_chk) and ((np.matmul(self.C,point) + self.b[None].T) < 0).all(): #if we reach depth
-            return True
-        elif (self.depth < depth_chk) and ((np.matmul(self.C,point) + self.b[None].T) < 0).all() and (self.children != []):
-            for child in self.children:
-                if child.point_check(point,depth_chk) == True:
-                    return True
+        try:
+            if (self.depth == depth_chk) and ((np.matmul(self.C,point) + self.b[None].T) < 0).all(): #if we reach depth
+                return True
+            elif (self.depth < depth_chk) and ((np.matmul(self.C,point) + self.b[None].T) < 0).all() and (self.children != []):
+                for child in self.children:
+                    if child.point_check(point,depth_chk) == True:
+                        return True
+        except ValueError:
+            print("Ooooops...")
         return False
+
+    def hyperP_Pre_filter(self,W,b):
+        num_c = len(W)
+        
+        W = W.astype(np.double)
+        b = b.astype(np.double)
+        
+        lil_W = []
+        lil_b = []
+        G = cvx.matrix(self.C)
+        h = cvx.matrix(-self.b)
+        for k in range(num_c): #skip first entries of W which are super-boundaries
+            c = cvx.matrix(-W[k,:,None])
+            sol = cvx.solvers.lp(c, G, h)
+            sol_ = -sol["primal objective"]
+            #print(str(np.abs(sol_ - b[k])))
+            if(sol_ == None):
+                print("Whoops")
+            if((sol_ + b[k]) > -1e-5):
+                lil_W.append(W[k,:])
+                lil_b.append(b[k])
+        return np.array(lil_W),np.array(lil_b)
 
     def hyperP_filter(self,W,b):
         num_c = len(W)
@@ -58,7 +140,7 @@ class Region(object):
         interior_point = []
         G = cvx.matrix(W)
         h = cvx.matrix(-b)
-        for k in range(len(self.C),num_c): #skip first entries of W which are super-boundaries
+        for k in range(num_c): #skip first entries of W which are super-boundaries
             c = cvx.matrix(-W[k,:,None])
             sol = cvx.solvers.lp(c, G, h)
             sol_ = sol["primal objective"]

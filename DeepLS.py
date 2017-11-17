@@ -25,18 +25,18 @@ l_rate=0.01
 momentum=0.95
 
 #Learn dynamics model of autonomous system
-#dynamics = Utils.learn_dynamics_model(sess,env,policy,architecture,optimizer,loss_func,total_grad_steps,
-#                                      traj_len,episodes,batch_size,l_rate,False,momentum)
+dynamics = Utils.learn_dynamics_model(sess,env,policy,architecture,optimizer,loss_func,total_grad_steps,
+                                      traj_len,episodes,batch_size,l_rate,False,momentum)
 
 #Get all weights and biases
-#Wb = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='dyn')
-#list_W = []
-#list_b = []
-#for i in range(len(Wb)):
-#    if i % 2 == 0:
-#        list_W.append(sess.run(Wb[i]).T)
-#    else:
-#        list_b.append(sess.run(Wb[i]).T)
+Wb = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='dyn')
+list_W = []
+list_b = []
+for i in range(len(Wb)):
+    if i % 2 == 0:
+        list_W.append(sess.run(Wb[i]).T)
+    else:
+        list_b.append(sess.run(Wb[i]).T)
 
 #TODO: Compare regions identified at random vs by following trajectories!
 #stats,_,_ = Utils.collect_traj(env,policy,30,30)
@@ -60,14 +60,17 @@ for i in range(len(bounds)):
 C = np.array(C)
 b = np.array(b)
 
-RegionTree = Utils.Region(C,b,np.zeros((4,1)),0,3)#len(list_W))
-W = np.random.uniform(-3.0,3.0,(10,4))
-b = np.random.uniform(-3.0,3.0,(10,))
-tmp = (b <= 0)
-diag = np.diag(np.array([int(i) for i in tmp])*2 - 1)
-W = np.matmul(diag,W)
-b = np.matmul(diag,b)
-RegionTree.find_children(W,b)
+RegionTree = Utils.Region(C,b,np.zeros((4,1)),0,3,dataW=list_W,datab=list_b)
+#(self,C,b,interior_point,depth,max_depth,parent=None,dataW=None,datab=None):
+#W = np.random.uniform(-3.0,3.0,(10,4))
+#b = np.random.uniform(-3.0,3.0,(10,))
+#tmp = (b <= 0)
+#diag = np.diag(np.array([int(i) for i in tmp])*2 - 1)
+#W = np.matmul(diag,W)
+#b = np.matmul(diag,b)
+W_,B_ = RegionTree.reorient_hyper_planes(list_W[0],list_b[0],RegionTree.interior_point,False)
+#RegionTree.find_children(W_,B_)
+RegionTree.find_family()
 #colors = []
 #points = []
 #for i in range(10000):

@@ -4,6 +4,9 @@ import tensorflow as tf
 import gym
 import numpy as np
 import cvxopt as cvx
+import cvxpy
+
+cvx.solvers.options['show_progress'] = False
 
 class Region(object):
     
@@ -16,6 +19,13 @@ class Region(object):
         self.interior_point = interior_point
         self.dataW = dataW
         self.datab = datab
+        self.Jacobian = None
+        
+        self.H = None
+        self.E = None
+        self.F = None
+        self.A_dyn = None
+        self.b_dyn = None
         
         if depth == max_depth:
             self.M = None
@@ -41,8 +51,9 @@ class Region(object):
             tmp = ((np.matmul(M,self.interior_point) + b[None].T)>=0)
             D = np.diag(np.array([int(i) for i in tmp]))
         W_new = np.matmul(np.matmul(self.M,D),M)
+        self.Jacobian = np.copy(W_new)
         B_new = (np.matmul(np.matmul(self.M,D),b[None].T).T)[0] + self.b_
-        B_newer = np.matmul(b[None],np.matmul(D,self.M.T))[0] + self.b_
+        #B_newer = np.matmul(b[None],np.matmul(D,self.M.T))[0] + self.b_
         #Reorient hyperplanes
         W_new_,B_new_ = self.reorient_hyper_planes(W_new,B_new,self.interior_point,False)
         #Pre-Filtering Step to remove redundant hyperplanes outside super boundary interior
@@ -60,6 +71,7 @@ class Region(object):
             print("Something went wrong")
         self.find_children(W_,B_)
         for child in self.children:
+            if(self.depth == 0): print("MegaRegions found: " + str(self.children.index(child)))
             child.find_family(W_new,B_new)
 
     def find_children(self,W,B):
@@ -67,8 +79,9 @@ class Region(object):
         #B_ = np.concatenate((self.b,B),axis=0)
         C,b,inout,interior_point = self.hyperP_filter(W,B)
         if not self.point_check(interior_point,self.depth+1):
+            if(len(b)<5): print("Problem occured. Trying to bound region by less than minimum required number of hyperplanes.")
             self.add_child(C,b,interior_point)
-            print("New Child Added in LEVEL "+str(self.depth)+" ! Num. of Children = " + str(len(self.children)))
+            print("New Child Added in LEVEL "+str(self.depth)+" with " + str(len(b)) + " boundaries! Num. of Children = " + str(len(self.children)))
         else:
             #print("Already visited!")
             return
@@ -93,8 +106,78 @@ class Region(object):
         W = np.matmul(diag,W)
         B = np.matmul(diag,B)
         return W,B
+
+    def shift_regions(self,shift):
+        self.b = self.b + np.matmul(self.C,shift).T[0]
+        self.interior_point_shifted = self.interior_point - shift
         
-    def point_check(self,point,depth_chk): #checks if a point is in a known region
+        if(len(self.children) > 0):
+            for c in self.children:
+                c.shift_regions(shift)
+
+    def find_maxr(self,max_r):
+         if len(self.children)>0:
+            for c in self.children:
+                c.find_maxr(max_r)
+         else:
+             if max_r[0] < len(self.C):
+                 max_r[0] = len(self.C)
+
+    def find_HEFAB(self,env,dynamics,shift,constraints,T,max_r):
+        if len(self.children)>0:
+            for c in self.children:
+                c.find_HEFAB(env,dynamics,shift,constraints,T,max_r)
+        else:
+            tmp = (self.b < 0); #find positive entries of bias
+            diag = np.diag(np.array([int(i) for i in tmp])*2 - 1) #create a matrix to shift hyperplanes that are negative
+            H_ = np.matmul(diag,self.C)
+            b_ = np.matmul(diag,self.b[None].T)
+            self.H = np.concatenate((H_,b_),axis=1) #   <--------- H matrix
+            tmp = ((np.matmul(H_,self.interior_point_shifted) + b_)>=0)
+            diag = np.diag(np.array([int(i) for i in tmp]))
+            diag_ = np.diag(np.array([int(i) for i in tmp])*2 - 1)
+            self.F = np.matmul(diag,self.H)         
+            filler = np.concatenate((np.eye(self.F.shape[1]-1),np.zeros((self.F.shape[1]-1,1))),axis=1)
+            self.F = np.concatenate((self.F,filler),axis=0) #   <--------- F matrix
+            
+            extrafill = max_r - self.H.shape[0]
+            self.F = np.concatenate((self.F,np.zeros((extrafill,self.F.shape[1]))),axis=0)
+            
+            G = np.matmul(diag_,self.H) 
+            flag = False
+            if all(self.b < 0):
+                flag = True
+                G = np.zeros(G.shape)
+            self.E = G
+            
+            A = dynamics.get_Jacobian(self.interior_point.T[0])[0][0].T
+            b = dynamics.step(self.interior_point.T[0])[0].T - np.matmul(A,self.interior_point)
+            self.A_dyn = (A - np.eye(len(A)))/env.env.dt
+            self.b_dyn = b/env.env.dt + np.matmul(self.A_dyn,shift)
+            
+            big_A = np.concatenate((self.A_dyn,self.b_dyn),axis=1)
+            big_A = np.concatenate((big_A,np.zeros((1,big_A.shape[1]))),axis=0)
+            
+            if not flag:
+                #self.T = cvxpy.Variable(1,self.F.shape[0])
+                self.u = cvxpy.Variable(1,self.E.shape[0])
+                self.w = cvxpy.Variable(1,self.E.shape[0])
+                constraints.append(T*self.F*big_A + self.u*self.E == 0)
+                constraints.append(T*self.F - self.w*self.E == 0)
+                constraints.append(self.u > 0)
+                constraints.append(self.w > 0)
+            else:
+                big_A = np.concatenate((self.A_dyn,np.zeros(self.b_dyn.shape)),axis=1)
+                big_A = np.concatenate((big_A,np.zeros((1,big_A.shape[1]))),axis=0)                
+                #self.T = cvxpy.Variable(1,self.F.shape[0])
+                self.u = cvxpy.Variable(1,self.E.shape[0])
+                self.w = cvxpy.Variable(1,self.E.shape[0])
+                constraints.append(T*self.F*big_A + self.u*self.E == 0)
+                constraints.append(T*self.F - self.w*self.E == 0)
+                constraints.append(self.u > 0)
+                constraints.append(self.w > 0)
+        
+    def point_check(self,point,depth_chk): #checks if a point is in a known region, POINT MUST BE R^{Nx1}!!!!!
         try:
             if (self.depth == depth_chk) and ((np.matmul(self.C,point) + self.b[None].T) < 0).all(): #if we reach depth
                 return True
@@ -105,6 +188,34 @@ class Region(object):
         except ValueError:
             print("Ooooops...")
         return False
+    
+    def return_regions(self,point,depth_chk): #checks if a point is in a known region
+        try:
+            if (self.depth == depth_chk) and ((np.matmul(self.C,point) + self.b[None].T) < 0).all(): #if we reach depth
+                return (self.C,self.b,self.interior_point)
+            elif (self.depth < depth_chk) and ((np.matmul(self.C,point) + self.b[None].T) < 0).all() and (self.children != []):
+                for child in self.children:
+                    tmp = child.return_regions(point,depth_chk)
+                    if tmp:
+                        return (self.C,self.b,self.interior_point),tmp
+        except ValueError:
+            print("Ooooops...")
+        return False    
+
+    def region_id(self,point,depth_chk): #checks if a point is in a known region
+        try:
+            if (self.depth == depth_chk) and ((np.matmul(self.C,point) + self.b[None].T) < 0).all(): #if we reach depth
+                return "#"
+            elif (self.depth < depth_chk) and ((np.matmul(self.C,point) + self.b[None].T) < 0).all() and (self.children != []):
+                i = 0
+                for child in self.children:
+                    tmp = child.region_id(point,depth_chk)
+                    if tmp:
+                        return str(i)+"-"+tmp
+                    i += 1
+        except ValueError:
+            print("Ooooops...")
+        return False  
 
     def hyperP_Pre_filter(self,W,b):
         num_c = len(W)
@@ -138,12 +249,14 @@ class Region(object):
         lil_b = []
         inout = []
         interior_point = []
+        log = []
         G = cvx.matrix(W)
         h = cvx.matrix(-b)
         for k in range(num_c): #skip first entries of W which are super-boundaries
             c = cvx.matrix(-W[k,:,None])
             sol = cvx.solvers.lp(c, G, h)
             sol_ = sol["primal objective"]
+            log.append(sol_)
             #print(str(np.abs(sol_ - b[k])))
             if(sol_ == None):
                 print("Whoops")
@@ -154,7 +267,10 @@ class Region(object):
                 lil_b.append(b[k])
             else:
                 inout.append(False)
-        
+        if(len(lil_b)<5): 
+            print("Problem occured. Trying to bound region by less than minimum required number of hyperplanes.")
+            print(str(W))
+            print(str(b))
         interior_point = np.mean(interior_point,axis=0)    
         return np.array(lil_W),np.array(lil_b),tuple(inout),interior_point
 
@@ -182,7 +298,7 @@ def all_sub_regions_detected(list_W,list_b):
         
 # AUXILIARY FUNCTIONS =========================================================
 
-cvx.solvers.options['show_progress'] = False
+#def Find_Lyapunov_Function(self,Region,)
 
 def point_induced_hyperP(list_W,list_b,point):
     D = [np.diag(np.ones(len(point)))]
@@ -367,8 +483,29 @@ def load_policy_and_env_from_pickle(sess,           #tensorflow session
 # =============================================================================
     
 #TODO: Load a pretraind dynamical model
-def load_dynamics_model(picklefile):
-    pass
+def load_dynamics_model( picklefile,
+                         sess,                  #tensorflow sess
+                         env,                   #environment
+                         policy,                #policy object
+                         architecture,          #architecture dictionary
+                         optimizer,             #tf optimizer
+                         loss_func,             #tf loss function
+                         total_grad_steps=1000, #gradient steps
+                         traj_len=100,          #trajectory length
+                         episodes=20,           #number of episodes
+                         batch_size=10,         #batch size
+                         l_rate=0.1,            #learning rate
+                         withInput=False,       #learn dynamics with input
+                         mom=0.95):             #momentum
+    dynamics = learn_dynamics_model(sess,env,policy,architecture,optimizer,loss_func,0,
+                                      traj_len,episodes,batch_size,l_rate,False,mom)
+    
+    weights = pickle.load(open(picklefile,"rb"))[0]
+    coll = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='dyn')
+    for p in range(len(coll)):
+        sess.run(coll[p].assign(weights[p]))
+        
+    return dynamics
 
 # =============================================================================
 

@@ -4,17 +4,23 @@ import numpy as np
 import tensorflow as tf
 import pickle
 import cvxpy
+import os
 
 #Define a new TF session
 sess = U.single_threaded_session()
 sess.__enter__()
 
+#Experiment Directory
+directory = "/home/vrubies/Research/baselines/baselines/trpo_mpi/experiments/"
+environ = "PointMass-v0"
+
 #Name of the pickle file
-picklefile = "/home/vrubies/Research/baselines/baselines/trpo_mpi/experiments/experiment_2017-10-27 16:05:44.152839.pkl"
+picklefile_names = os.listdir(path=directory)
+picklefile_names = [directory+name for name in picklefile_names if environ in name]
 picklefile2 = '/home/vrubies/Research/DLS/saved_net.pkl'
 
 #Load pre-trained policy and get environment
-policy,env = Utils.load_policy_and_env_from_pickle(sess,picklefile)
+policies,env = Utils.load_policy_and_env_from_pickle(sess,picklefile_names)
 
 # PARAMETERS for learning the dynamics
 architecture = {"hid_size":10,"num_hid_layers":2,"activation":tf.nn.relu}
@@ -28,10 +34,10 @@ l_rate=0.01
 momentum=0.95
 
 #Learn dynamics model of autonomous system
-#dynamics = Utils.learn_dynamics_model(sess,env,policy,architecture,optimizer,loss_func,total_grad_steps,
-#                                      traj_len,episodes,batch_size,l_rate,False,momentum)
-dynamics = Utils.load_dynamics_model(picklefile2,sess,env,policy,architecture,optimizer,loss_func,total_grad_steps,
+dynamics = Utils.learn_dynamics_model(sess,env,policies,architecture,optimizer,loss_func,total_grad_steps,
                                       traj_len,episodes,batch_size,l_rate,False,momentum)
+#dynamics = Utils.load_dynamics_model(picklefile2,sess,env,policies,architecture,optimizer,loss_func,total_grad_steps,
+#                                      traj_len,episodes,batch_size,l_rate,False,momentum)
 
 scaling = 1.0
 #Get all weights and biases
@@ -89,37 +95,37 @@ print(tmp_)
 shift = tmp_[0].T
 avore = RegionTree.return_regions(tmp_[0].T,3); avore = avore[1]; avore = avore[1]; avore = avore[1];
 RegionTree.shift_regions(shift)
-#max_r = [0]
-#RegionTree.find_maxr(max_r)
+max_r = [0]
+RegionTree.find_maxr(max_r)
 constraints = []
 T = cvxpy.Variable(1,max_r[0]+4)
-RegionTree.find_HEFAB(env,dynamics,shift,constraints,T)#,max_r[0])
-obj = cvxpy.Minimize(0)
-Prob = cvxpy.Problem(obj,constraints)
-Prob.solve()
+RegionTree.find_HEFAB(env,dynamics,shift,constraints,T,max_r[0])
+#obj = cvxpy.Minimize(0)
+#Prob = cvxpy.Problem(obj,constraints)
+#Prob.solve()
 
-for i in range(100):
-    gf = np.random.randint(0,len(RegionTree.children))
-    dd = np.random.randint(0,len(RegionTree.children[gf].children))
-    ch = np.random.randint(0,len(RegionTree.children[gf].children[dd].children))
-    x = RegionTree.children[gf].children[dd].children[ch].interior_point_shifted
-    x_ = np.concatenate((x,np.ones((1,1))),axis=0)
-    tmp = np.matmul(np.array(RegionTree.children[gf].children[dd].children[ch].u.value),
-                             RegionTree.children[gf].children[dd].children[ch].E)
-    dec = np.matmul(tmp,x_)
+#for i in range(100):
+#    gf = np.random.randint(0,len(RegionTree.children))
+#    dd = np.random.randint(0,len(RegionTree.children[gf].children))
+#    ch = np.random.randint(0,len(RegionTree.children[gf].children[dd].children))
+#    x = RegionTree.children[gf].children[dd].children[ch].interior_point_shifted
+#    x_ = np.concatenate((x,np.ones((1,1))),axis=0)
+#    tmp = np.matmul(np.array(RegionTree.children[gf].children[dd].children[ch].u.value),
+#                             RegionTree.children[gf].children[dd].children[ch].E)
+#    dec = np.matmul(tmp,x_)
 
-    print(str(dec))
+#    print(str(dec))
 #    
-t = np.array(T.value).T
-x = np.random.uniform(-3,3,size=(4,1))
-for i in range(100):
-    rid = RegionTree.region_id(x,3).split("-")
-    gf = int(rid[0]); dd = int(rid[1]); ch = int(rid[2]);
-    F = RegionTree.children[gf].children[dd].children[ch].F
-    x_ = np.concatenate((x,np.ones((1,1))),axis=0)
-    val = np.matmul(np.matmul(F.T,t).T,x_)
-    print(val)
-    x = dynamics.step(x.T[0])[0].T
+#t = np.array(T.value).T
+#x = np.random.uniform(-3,3,size=(4,1))
+#for i in range(100):
+#    rid = RegionTree.region_id(x,3).split("-")
+#    gf = int(rid[0]); dd = int(rid[1]); ch = int(rid[2]);
+#    F = RegionTree.children[gf].children[dd].children[ch].F
+#    x_ = np.concatenate((x,np.ones((1,1))),axis=0)
+#    val = np.matmul(np.matmul(F.T,t).T,x_)
+#    print(val)
+#    x = dynamics.step(x.T[0])[0].T
     
     
 #colors = []

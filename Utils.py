@@ -5,6 +5,7 @@ import gym
 import numpy as np
 import cvxopt as cvx
 import cvxpy
+import cdd
 
 cvx.solvers.options['show_progress'] = False
 
@@ -274,6 +275,15 @@ class Region(object):
         interior_point = np.mean(interior_point,axis=0)    
         return np.array(lil_W),np.array(lil_b),tuple(inout),interior_point
 
+def convert_HtoV(A,b):
+    M = np.concatenate((b,-A),axis=1)
+    mat = cdd.Matrix(M,number_type='float')
+    mat.rep_type = cdd.RepType.INEQUALITY
+    poly = cdd.Polyhedron(mat)
+    ext = poly.get_generators()
+    ext = np.array(ext)
+    return ext
+
 # The region_list list containing tuples of the form ((C,b,ipoint),[...])
 #def get_all_regions(list_W,list_b,bounds,center): #assumes all W are in negative wrt origin position
 #    C = []
@@ -421,12 +431,13 @@ def get_activation(activation):
     if(activation.find("sigmoid") >= 0):
         return tf.nn.sigmoid
     
-def collect_traj(env,policy,episodes,traj_len):
+def collect_traj(env,policies,episodes,traj_len):
     observations = []
     actions = []
     target = []
     obs = env.reset()
     for i in range(episodes):
+        policy = policies[np.random.randint(len(policies))]
         for j in range(traj_len):
             action,predval = policy.act(False,obs)
             n_obs,rew,reset,info = env.step(action)
@@ -450,35 +461,46 @@ def collect_traj(env,policy,episodes,traj_len):
 # This function takes in a picklefile of a dict with the following format:
 # {"env_id":"env-name","architecture":[width,depth,activ_fcn],"NNparams":[W0,b0,W1...],"param_names":["w0","b0",...]}
 def load_policy_and_env_from_pickle(sess,           #tensorflow session
-                                    picklefile):    #pickliefile name -- str
+                                    picklefile_names):    #pickliefile name -- str
     
     from baselines.ppo1.mlp_policy import MlpPolicy 
     
-    #Load information from policy contained in pickle file    
-    all_info = pickle.load(open(picklefile,"rb"))    
-    env_id = all_info["env_id"]
-    hid_size, num_hid_layers, activation = all_info["architecture"]
-    params = all_info["NNparams"]
-    param_names = all_info["param_names"]
-    
-    #Initialize env
-    env = gym.make(env_id)
-    
-    #Create policy object
-    policy = MlpPolicy(name="pi", ob_space=env.observation_space, ac_space=env.action_space,
-            hid_size=hid_size, num_hid_layers=num_hid_layers, activation=get_activation(activation))
+    #Load information from policy contained in pickle file
+    policies = []
+    env_initialized = False    
+    ind = 0;
+    for picklefile in picklefile_names:
+        all_info = pickle.load(open(picklefile,"rb"))    
+        env_id = all_info["env_id"]
+        hid_size, num_hid_layers, activation = all_info["architecture"]
+        params = all_info["NNparams"]
+        param_names = all_info["param_names"]
+        
+        #Initialize env
+        if not env_initialized:
+            env = gym.make(env_id)
+            env_initialized = True
+        
+        #Create policy object
+        policy = MlpPolicy(name="pi"+str(ind), ob_space=env.observation_space, ac_space=env.action_space,
+                hid_size=hid_size, num_hid_layers=num_hid_layers, activation=get_activation(activation))
+        
+        policies.append(policy)
+        #Initialize variables in "pi" scope        
+        pol_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="pi"+str(ind))
+        dict_params = {v.name:v for v in pol_params}
+        pol_init = tf.variables_initializer(pol_params)
+        sess.run(pol_init)
+        pol_params = [pol_param for pol_param in pol_params if "pol" in pol_param.name]
 
-    #Initialize variables in "pi" scope        
-    pol_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='pi')
-    dict_params = {v.name:v for v in pol_params}
-    pol_init = tf.variables_initializer(pol_params)
-    sess.run(pol_init)
+        #Load weights and biases to NN
+        for p in range(len(params)):
+            sess.run(pol_params[p].assign(params[p]));
+            #sess.run(dict_params[param_names[p]].assign(params[p]));
 
-    #Load weights and biases to NN
-    for p in range(len(params)):
-        sess.run(dict_params[param_names[p]].assign(params[p]));
+        ind += 1;
 
-    return policy,env
+    return policies,env
 
 # =============================================================================
     
@@ -513,7 +535,7 @@ def load_dynamics_model( picklefile,
 #TODO: Learn x_{t+1} = f(x_t,pi*(x_t)) -- or -- Delta_x = x_{t+1}-x_{t} = f(x_t,pi*(x_t)) ??
 def learn_dynamics_model(sess,                  #tensorflow sess
                          env,                   #environment
-                         policy,                #policy object
+                         policies,                #policy object
                          architecture,          #architecture dictionary
                          optimizer,             #tf optimizer
                          loss_func,             #tf loss function
@@ -554,8 +576,8 @@ def learn_dynamics_model(sess,                  #tensorflow sess
     sess.run(loss_opt_init)
     
     #Collect data for training and testing
-    data1,data2,target = collect_traj(env,policy,episodes,traj_len)
-    v_da1,v_da2,v_targ = collect_traj(env,policy,episodes//2,traj_len)
+    data1,data2,target = collect_traj(env,policies,episodes,traj_len)
+    v_da1,v_da2,v_targ = collect_traj(env,policies,episodes//2,traj_len)
     
     #Learn the dynamical system
     for i in range(total_grad_steps):
@@ -570,8 +592,17 @@ def learn_dynamics_model(sess,                  #tensorflow sess
             if(np.mod(i,20) == 0):
                 val_loss = sess.run(loss,{dynamics.state_in:v_da1,dynamics.state_next:v_targ})
                 print("Loss = " + str(l) + " || Validation = " + str(val_loss))            
+
+    params = sess.run(dyn_params)
+    list_W = []
+    list_b = []
+    for i in range(len(params)):
+        if i % 2 == 0:
+            list_W.append(params[i].T)
+        else:
+            list_b.append(params[i].T)
                 
-    return dynamics
+    return dynamics,list_W,list_b
 
 # =============================================================================
             

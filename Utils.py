@@ -9,6 +9,11 @@ import cdd
 
 cvx.solvers.options['show_progress'] = False
 
+# ============== Class Definitions for
+# 1.) Region
+# 2.) HPolytope
+# 3.) Polytope Tree
+
 class Region(object):
     
     def __init__(self,C,b,interior_point,depth,max_depth,parent=None,dataW=None,datab=None):
@@ -275,6 +280,56 @@ class Region(object):
         interior_point = np.mean(interior_point,axis=0)    
         return np.array(lil_W),np.array(lil_b),tuple(inout),interior_point
 
+class HPolytope(object):
+    
+    def __init__(self,A,b):
+        self.A = A
+        self.b = b
+        self.neighbors = []
+        
+        VandR = self.convert_HtoV()
+        bool_vec = (VandR[:,0] == 1)
+        self.V = VandR[bool_vec,1:]
+        self.R = VandR[~bool_vec,1:]
+        
+        self.points = np.concatenate(self.find_point_in_each_face())
+        self.check = np.matmul(self.A,self.points.T) - b
+        
+        self.interior_point = np.mean(self.points,axis=0,keepdims=True)
+
+    def convert_HtoV(self):
+        M = np.concatenate((self.b,-self.A),axis=1)
+        mat = cdd.Matrix(M,number_type='float')
+        mat.rep_type = cdd.RepType.INEQUALITY
+        poly = cdd.Polyhedron(mat)
+        ext = poly.get_generators()
+        ext = np.array(ext)
+        return ext   
+
+    def find_point_in_each_face(self): #(Non-Trivial Point)
+        vertex_loc_mat = np.matmul(self.A,self.V.T) - self.b
+        points = []
+        for i in range(len(vertex_loc_mat)):
+            vertices_in_face_i = np.array([True if abs(val) < 1e-9 else False for val in vertex_loc_mat[i,:]])
+            mph = np.mean(self.V[vertices_in_face_i],axis=0,keepdims=True) #mid point hull
+            rays_in_face_i = np.array([True if abs((np.matmul(self.A[i,None,:],(ray[None] + mph).T)[0] - self.b[i])[0]) < 1e-9 else False for ray in self.R])
+            if(len(rays_in_face_i) > 0):
+                mrp = np.mean(self.R[rays_in_face_i],axis=0,keepdims=True)
+            else:
+                mrp = 0;
+            points.append(mph+mrp)
+        return points
+
+class Polytope_Tree(object):
+    
+    def __init__(self,polytope):
+        self.polytope = polytope
+        
+    def find_dynamics_inside(self):
+        
+        
+# AUXILIARY FUNCTIONS =========================================================
+
 def convert_HtoV(A,b):
     M = np.concatenate((b,-A),axis=1)
     mat = cdd.Matrix(M,number_type='float')
@@ -283,32 +338,6 @@ def convert_HtoV(A,b):
     ext = poly.get_generators()
     ext = np.array(ext)
     return ext
-
-# The region_list list containing tuples of the form ((C,b,ipoint),[...])
-#def get_all_regions(list_W,list_b,bounds,center): #assumes all W are in negative wrt origin position
-#    C = []
-#    b = []
-#    for i in range(len(bounds)):
-#        v = np.zeros((len(bounds),))
-#        v[i] = 1.0
-#        C.append(v)
-#        C.append(-v)
-#        low,high = bounds[i]
-#        b.append(low)
-#        b.append(high)
-#    C = np.array(C)
-#    b = np.array(b)
-#        
-#    RegionTree = Region(C,b,center,0,len(list_W))
-    
-            
-    
-def all_sub_regions_detected(list_W,list_b):
-    pass
-        
-# AUXILIARY FUNCTIONS =========================================================
-
-#def Find_Lyapunov_Function(self,Region,)
 
 def point_induced_hyperP(list_W,list_b,point):
     D = [np.diag(np.ones(len(point)))]
@@ -334,7 +363,7 @@ def point_induced_hyperP(list_W,list_b,point):
             
     return D,C,b
     
-def get_region(list_W,list_b,point):
+def get_region(list_W,list_b,point): #Input: List of weights and biases in "common form" (i.e. b \in R^{nx1} NOT R^{1xn})
     _,C,b = point_induced_hyperP(list_W,list_b,point)
     big_C = np.concatenate(C,axis=0)
     big_b = np.concatenate(b,axis=0)

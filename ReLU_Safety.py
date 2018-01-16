@@ -40,7 +40,8 @@ dynamics,list_W,list_b = Utils.learn_dynamics_model(sess,env,policies,architectu
 
 
 
-M,b = Utils.get_region(list_W,list_b,np.array([[0.0],[0.0],[0.0],[0.0]]))
+M,b = Utils.get_region(list_W,list_b,np.array([[4.0],[4.0],[0.0],[0.0]]))
 M = np.array(M)
 b = -np.array(b)[None].T       
-avore = Utils.convert_HtoV(M,b)    
+avore = Utils.convert_HtoV(M,b)
+polytope = Utils.HPolytope(M,b)    

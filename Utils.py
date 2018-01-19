@@ -280,21 +280,57 @@ class Region(object):
         interior_point = np.mean(interior_point,axis=0)    
         return np.array(lil_W),np.array(lil_b),tuple(inout),interior_point
 
+class Polytope_Tree(object):
+    
+    def __init__(self,state,policy,dynamics,pW,dW,dt):
+        self.root = HPolytope(state,policy,dynamics,pW,dW,dt)
+        self.find_all_dynamic_neighbors(self.root,policy,dynamics,pW,dW,dt)
+        
+    def find_all_dynamic_neighbors(self,node,policy,dynamics,pW,dW,dt):
+        for i in range(len(node.exit_facets)):
+            if node.exit_facets[i]:
+                tmp_point = node.points[i]
+                while np.matmul(node.A[i,:],tmp_point) <= node.b[i]:
+                    tmp_point += 1e-6*self.A[i,:]
+                tmp_neighbor = node.check_if_in_union_BFS(tmp_point)
+                if tmp_neighbor is None:
+                    node.neighbors.append(HPolytope(tmp_point,policy,dynamics,pW,dW,dt))
+                    node.neighbors[-1].neighbors.append(node)
+                else:
+                    node.neighbors.append(tmp_neighbor)
+        
+        node.neighbors_found = True
+        
+        for neighbor in node.neighbors:
+            if not neighbor.neighbors_found:
+                self.find_all_dynamic_neighbors(self,neighbor,policy,dynamics,pW,dW,dt)   
+        
 class HPolytope(object):
     
-    def __init__(self,A,b):
+    def __init__(self,state,policy,dynamics,pW,dW,dt):
+        A,b,dyn_Af,dyn_c = self.get_polytope(state,policy,dynamics,pW,dW,dt)
+        self._init(A,b,dyn_Af,dyn_c)
+        
+    def _init(self,A,b,dyn_A,dyn_b):
         self.A = A
         self.b = b
+        self.dyn_A = dyn_A 
+        self.dyn_b = dyn_b  
+        
+        self.neighbors_found = False
         self.neighbors = []
+
+        self.flag_visit = False; #Used for BFS
         
         VandR = self.convert_HtoV()
         bool_vec = (VandR[:,0] == 1)
         self.V = VandR[bool_vec,1:]
         self.R = VandR[~bool_vec,1:]
         
-        self.points = np.concatenate(self.find_point_in_each_face())
-        self.check = np.matmul(self.A,self.points.T) - b
-        
+        #Get (non-trivial) points in each facet and exit facets
+        self.points,self.exit_facets = self.find_facet_points_and_exit_facets()
+        self.points = np.concatenate(self.points)
+        self.check = (np.abs(np.diagonal(np.matmul(self.A,self.points.T) - b)) < 1e-7).all()
         self.interior_point = np.mean(self.points,axis=0,keepdims=True)
 
     def convert_HtoV(self):
@@ -304,28 +340,158 @@ class HPolytope(object):
         poly = cdd.Polyhedron(mat)
         ext = poly.get_generators()
         ext = np.array(ext)
-        return ext   
+        return ext
 
-    def find_point_in_each_face(self): #(Non-Trivial Point)
+    def find_facet_points_and_exit_facets(self): #(Non-Trivial Point)
         vertex_loc_mat = np.matmul(self.A,self.V.T) - self.b
         points = []
+        exit_facets = []
         for i in range(len(vertex_loc_mat)):
             vertices_in_face_i = np.array([True if abs(val) < 1e-9 else False for val in vertex_loc_mat[i,:]])
+            Verts = self.V[vertices_in_face_i].T
             mph = np.mean(self.V[vertices_in_face_i],axis=0,keepdims=True) #mid point hull
             rays_in_face_i = np.array([True if abs((np.matmul(self.A[i,None,:],(ray[None] + mph).T)[0] - self.b[i])[0]) < 1e-9 else False for ray in self.R])
+            Rays = self.R[rays_in_face_i].T #what happens when rays_in_face_i is empty?
             if(len(rays_in_face_i) > 0):
                 mrp = np.mean(self.R[rays_in_face_i],axis=0,keepdims=True)
             else:
                 mrp = 0;
+                
             points.append(mph+mrp)
-        return points
-
-class Polytope_Tree(object):
-    
-    def __init__(self,polytope):
-        self.polytope = polytope
+            
+            #Check implementation
+            dyn_at_point = np.matmul(self.dyn_A,points[-1].T) + self.dyn_b
+            if(np.matmul(self.A[i,None,:],dyn_at_point) > 0):
+                exit_facets.append(True);
+            else:
+                dyn_at_verts = np.matmul(self.dyn_A,Verts) + self.dyn_b
+                dyn_at_rays = np.matmul(self.dyn_A,Rays)
+                all_vinner_prods = np.matmul(self.A[i,None,:],dyn_at_verts)
+                all_rinner_prods = np.matmul(self.A[i,None,:],dyn_at_rays)
+                if((all_vinner_prods <= 0).all() and (all_rinner_prods <= 0).all()):
+                    exit_facets.append(False)
+                else:
+                    exit_facets.append(True)
+            
+        return points,exit_facets            
+                
+    def get_polytope(self,state,policy,dynamics,pW,dW,dt):
+        list_Wp,list_bp = pW                                    #Unpack weightd and biases for the policy
+        Ap,bp = self.get_region(list_Wp,list_bp,state)          #Get H-representation Polytope for state
+        K = policy.get_Jacobian(state)                          #Get K (from u = Kx + d)
+        d = policy.act(False,state) - np.matmul(K,state)        #Get d (from u = Kx + d)
         
-    def find_dynamics_inside(self):
+        action = np.matmul(K,state)+d                           #Get action
+        state_action = np.concatenate((state,action),axis=0)    #Concatenate state and action
+        list_Wd,list_bd = dW                                    #Unpack weights and biases for the dynamics
+        Ad,bd = self.get_region(list_Wd,list_bd,state_action)   #Get H-representation Polytope for state-action
+        
+        dyn_A,dyn_B = dynamics.get_Jacobian(state,action)       #Get dynamic matrices
+        c = dynamics.step(state,action) - np.matmul(dyn_A,state) - np.matmul(dyn_B,action) #Get dynamic bias
+        
+        # Generate (CONTINUOUS TIME) autonomous dynamics model
+        dyn_Af = ((dyn_A - np.eye(len(dyn_A))) + np.matmul(dyn_B,K))/dt
+        dyn_c = (np.matmul(dyn_B,d) + c)/dt
+        
+        #Get polytope where the autonomous dynamics are valid
+        n = len(state)
+        Ap_ = Ad[:,:n] + np.matmul(Ad[:,n:],K)
+        bp_ = bd - np.matmul(Ad[:,n:],d)
+        new_A = np.concatenate((Ap,Ap_),axis=0)
+        new_b = np.concatenate((bp,bp_),axis=0) 
+        A,b = self.hyperP_filter(new_A,new_b)
+
+        return A,b,dyn_Af,dyn_c
+
+    def check_if_in_union_BFS(self,state):
+        queue = []
+        undo_queue = []
+        queue.append(self) #chgd
+        self.flag_visit = True #chgd
+        
+        while queue:
+            
+            poly = queue.pop(0)
+            undo_queue.append(poly)
+            
+            if((np.matmul(poly.A,state) <= poly.b).all()):
+                for p in undo_queue: p.flag_visit = False
+                for p in queue: p.flag_visit = False
+                return poly
+            else:
+                for neighbor in poly.neighbors: 
+                    if neighbor.flag_visit is False:
+                        neighbor.flag_visit = True
+                        queue.append(neighbor)
+
+        for p in undo_queue: p.flag_visit = False
+        for p in queue: p.flag_visit = False
+        return None          
+        
+    def point_induced_hyperP(self,list_W,list_b,point):
+        D = [np.diag(np.ones(len(point)))]
+        C = []
+        b = []
+        y = point
+        for k in range(len(list_W)-1):
+            y = np.matmul(D[-1],y)
+            y = np.matmul(list_W[k],y) + list_b[k][None].T
+            bool_y = (y >= 0)
+            D_tmp = np.diag(np.array([int(tmp) for tmp in bool_y]))
+            D.append(D_tmp)
+        for k in range(len(list_W)):
+            C.append(np.diag(np.ones(list_W[0].shape[1])))
+            for i in range(k+1):
+                tmp = np.matmul(list_W[i],D[i])
+                C[-1] = np.matmul(tmp,C[-1])
+    
+        tmp = np.zeros((D[0].shape[0],1))
+        for k in range(len(list_W)):
+            tmp = list_b[k][None].T + np.matmul(np.matmul(list_W[k],D[k]),tmp) 
+            b.append(tmp)                   
+                
+        return D,C,b
+        
+    def get_region(self,list_W,list_b,point): #Input: List of weights and biases in "common form" (i.e. b \in R^{nx1} NOT R^{1xn})
+        _,C,b = self.point_induced_hyperP(list_W,list_b,point)
+        big_C = np.concatenate(C,axis=0)
+        big_b = np.concatenate(b,axis=0)
+        tmp = (np.matmul(big_C,point) + big_b <= 0)
+        diag = np.diag(np.array([int(i) for i in tmp])*2 - 1)
+        
+        big_C = np.matmul(diag,big_C)
+        big_b = np.matmul(diag,big_b)  
+    
+        lil_C,lil_b,_,_ = self.hyperP_filter(big_C,big_b)
+                
+        return lil_C,lil_b
+    
+    # Given a set of hyperplanes defined by (C,b), this function eliminates redundant
+    # constraints of the set {x | Cx + b < 0}
+    def hyperP_filter(self,C,b):
+        num_c = len(C)
+    
+        lil_C = []
+        lil_b = []
+        inout = []
+        interior_point = []
+        G = cvx.matrix(C)
+        h = cvx.matrix(-b)
+        for k in range(num_c):
+            c = cvx.matrix(-C[k,:,None])
+            sol = cvx.solvers.lp(c, G, h)
+            #print(sol["primal objective"] - big_b[k,0])
+            if(np.abs(sol["primal objective"] - b[k]) < 1e-6):
+                interior_point.append(np.array(sol["x"]))
+                inout.append(True)
+                lil_C.append(C[k,:])
+                lil_b.append(b[k,0])
+            else:
+                inout.append(False)
+        
+        interior_point = np.mean(interior_point,axis=0)    
+        return lil_C,lil_b,inout,interior_point
+    
         
         
 # AUXILIARY FUNCTIONS =========================================================

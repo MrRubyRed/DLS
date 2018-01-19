@@ -62,12 +62,13 @@ class MlpDynamics(object):
             return self.n_step(ob[None])
     def get_architecture(self):
         return self.hid_size,self.num_hid_layers,self.activation
-    def get_Jacobian(self, state, policy=None):
+    def get_Jacobian(self, state, action=None, policy=None):
         if self.withInput:
-            dUdx = policy.get_Jacobian(state[None])[0]
-            action,_ = policy.act(False, state)
+            #dUdx = policy.get_Jacobian(state[None])[0]
+            #action,_ = policy.act(False, state)
             A,B = self.Jacobian(state[None],action[None])
-            return A + np.matmul(dUdx,B)
+            #return A + np.matmul(dUdx,B)
+            return A,B
         else:
             A = self.Jacobian(state[None])
             return A

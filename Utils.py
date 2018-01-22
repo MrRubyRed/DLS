@@ -6,6 +6,7 @@ import numpy as np
 import cvxopt as cvx
 import cvxpy
 import cdd
+import matplotlib.pyplot as plt
 
 cvx.solvers.options['show_progress'] = False
 
@@ -284,17 +285,32 @@ class Polytope_Tree(object):
     
     def __init__(self,state,policy,dynamics,pW,dW,dt):
         self.root = HPolytope(state,policy,dynamics,pW,dW,dt)
-        self.find_all_dynamic_neighbors(self.root,policy,dynamics,pW,dW,dt)
+        poly_points = []
+        self.find_all_dynamic_neighbors(self.root,policy,dynamics,pW,dW,dt,0,poly_points)
+        #ponts = np.concatenate(poly_points,axis=0)
+        #plt.scatter(ponts[:-1,0],ponts[:-1,1],c='b')
+        #plt.scatter(ponts[-1,0],ponts[-1,1],c='r')
+        #plt.show()
+        #plt.pause(0.01)
         
-    def find_all_dynamic_neighbors(self,node,policy,dynamics,pW,dW,dt):
+    def find_all_dynamic_neighbors(self,node,policy,dynamics,pW,dW,dt,depth,poly_points):
+        poly_points.append(node.interior_point)
+        ponts = np.concatenate(poly_points,axis=0)
+        plt.clf()
+        plt.scatter(ponts[:-1,0],ponts[:-1,1],c='b')
+        plt.scatter(ponts[-1,0],ponts[-1,1],c='r')
+        plt.show()
+        plt.pause(0.01)
+        flag = False
         for i in range(len(node.exit_facets)):
             if node.exit_facets[i]:
-                tmp_point = node.points[i]
-                while np.matmul(node.A[i,:],tmp_point) <= node.b[i]:
-                    tmp_point += 1e-6*self.A[i,:]
+                tmp_point = np.copy(node.points[i])
+                while np.inner(node.A[i,:],tmp_point) <= node.b[i][0]:
+                    tmp_point += 1e-8*node.A[i,:]
+                    flag = True
                 tmp_neighbor = node.check_if_in_union_BFS(tmp_point)
                 if tmp_neighbor is None:
-                    node.neighbors.append(HPolytope(tmp_point,policy,dynamics,pW,dW,dt))
+                    node.neighbors.append(HPolytope(tmp_point[None].T,policy,dynamics,pW,dW,dt))
                     node.neighbors[-1].neighbors.append(node)
                 else:
                     node.neighbors.append(tmp_neighbor)
@@ -303,7 +319,29 @@ class Polytope_Tree(object):
         
         for neighbor in node.neighbors:
             if not neighbor.neighbors_found:
-                self.find_all_dynamic_neighbors(self,neighbor,policy,dynamics,pW,dW,dt)   
+                print("Starting New Search. Current Recursive Depth: " + str(depth) + " || Interior P=" + str(neighbor.interior_point) +" || Contains Rays = " + str(len(neighbor.R)>0) + " || " + str(flag))
+                self.find_all_dynamic_neighbors(neighbor,policy,dynamics,pW,dW,dt,depth+1,poly_points)
+        
+        print("All neighbors found at a depth="+str(depth))
+        
+    def check_invariance(self,state,steps,policy,dynamics,pW,dW,dt):
+        checks = []
+        traj=[]
+        new_state = np.copy(state)
+        traj.append(new_state)
+        node = self.root
+        for i in range(steps):
+            new_state = dynamics.step(new_state,policy.act(False,new_state)[0])[0][0]
+            traj.append(new_state)
+            node = node.check_if_in_union_BFS(state)
+            if(node is None):
+                checks.append(False)
+            else:
+                checks.append(True)
+        traj = np.array(traj)
+        plt.scatter(traj[:,0],traj[:,1],c='g')
+        plt.pause(0.01)
+        return checks
         
 class HPolytope(object):
     
@@ -313,7 +351,7 @@ class HPolytope(object):
         
     def _init(self,A,b,dyn_A,dyn_b):
         self.A = A
-        self.b = b
+        self.b = -b
         self.dyn_A = dyn_A 
         self.dyn_b = dyn_b  
         
@@ -330,7 +368,12 @@ class HPolytope(object):
         #Get (non-trivial) points in each facet and exit facets
         self.points,self.exit_facets = self.find_facet_points_and_exit_facets()
         self.points = np.concatenate(self.points)
-        self.check = (np.abs(np.diagonal(np.matmul(self.A,self.points.T) - b)) < 1e-7).all()
+        
+        self.check = (np.abs(np.diagonal(np.matmul(self.A,self.points.T) - self.b)) < 1e-7).all()
+        #print(str(self.A))
+        #print(str(self.b))
+        print(self.check)
+        #print(str(self.points))
         self.interior_point = np.mean(self.points,axis=0,keepdims=True)
 
     def convert_HtoV(self):
@@ -351,8 +394,12 @@ class HPolytope(object):
             Verts = self.V[vertices_in_face_i].T
             mph = np.mean(self.V[vertices_in_face_i],axis=0,keepdims=True) #mid point hull
             rays_in_face_i = np.array([True if abs((np.matmul(self.A[i,None,:],(ray[None] + mph).T)[0] - self.b[i])[0]) < 1e-9 else False for ray in self.R])
-            Rays = self.R[rays_in_face_i].T #what happens when rays_in_face_i is empty?
-            if(len(rays_in_face_i) > 0):
+            if(len(rays_in_face_i) > 0) and rays_in_face_i.any():
+                for ray in self.R:
+                    print(abs((np.matmul(self.A[i,None,:],(ray[None] + mph).T)[0] - self.b[i])[0]))
+                print(rays_in_face_i)
+                print('Yes')
+                Rays = self.R[rays_in_face_i].T
                 mrp = np.mean(self.R[rays_in_face_i],axis=0,keepdims=True)
             else:
                 mrp = 0;
@@ -361,13 +408,17 @@ class HPolytope(object):
             
             #Check implementation
             dyn_at_point = np.matmul(self.dyn_A,points[-1].T) + self.dyn_b
+            #print(dyn_at_point)
             if(np.matmul(self.A[i,None,:],dyn_at_point) > 0):
                 exit_facets.append(True);
             else:
                 dyn_at_verts = np.matmul(self.dyn_A,Verts) + self.dyn_b
-                dyn_at_rays = np.matmul(self.dyn_A,Rays)
                 all_vinner_prods = np.matmul(self.A[i,None,:],dyn_at_verts)
-                all_rinner_prods = np.matmul(self.A[i,None,:],dyn_at_rays)
+                if(len(rays_in_face_i) > 0) and rays_in_face_i.any():
+                    dyn_at_rays = np.matmul(self.dyn_A,Rays)
+                    all_rinner_prods = np.matmul(self.A[i,None,:],dyn_at_rays)
+                else:
+                    all_rinner_prods = np.array([-1.0])
                 if((all_vinner_prods <= 0).all() and (all_rinner_prods <= 0).all()):
                     exit_facets.append(False)
                 else:
@@ -378,16 +429,18 @@ class HPolytope(object):
     def get_polytope(self,state,policy,dynamics,pW,dW,dt):
         list_Wp,list_bp = pW                                    #Unpack weightd and biases for the policy
         Ap,bp = self.get_region(list_Wp,list_bp,state)          #Get H-representation Polytope for state
-        K = policy.get_Jacobian(state)                          #Get K (from u = Kx + d)
-        d = policy.act(False,state) - np.matmul(K,state)        #Get d (from u = Kx + d)
+        K = policy.get_Jacobian(state.T)[0][0]                  #Get K (from u = Kx + d) [Takes in np.arrat.shape = (1,n)] [returns np.array.spahe = (k,n,n)]
+        d = policy.act(False,state.T[0])[0][None].T - np.matmul(K,state) #Get d (from u = Kx + d) [Takes in np.arrat.shape = (n,)] [returns (np.array.shape=(n,),float)]
         
         action = np.matmul(K,state)+d                           #Get action
         state_action = np.concatenate((state,action),axis=0)    #Concatenate state and action
         list_Wd,list_bd = dW                                    #Unpack weights and biases for the dynamics
         Ad,bd = self.get_region(list_Wd,list_bd,state_action)   #Get H-representation Polytope for state-action
         
-        dyn_A,dyn_B = dynamics.get_Jacobian(state,action)       #Get dynamic matrices
-        c = dynamics.step(state,action) - np.matmul(dyn_A,state) - np.matmul(dyn_B,action) #Get dynamic bias
+        dyn_A,dyn_B = dynamics.get_Jacobian(state.T[0],action.T[0])       #Get dynamic matrices
+        dyn_A = dyn_A[0]
+        dyn_B = dyn_B[0]
+        c = dynamics.step(state.T[0],action.T[0])[0].T - np.matmul(dyn_A,state) - np.matmul(dyn_B,action) #Get dynamic bias
         
         # Generate (CONTINUOUS TIME) autonomous dynamics model
         dyn_Af = ((dyn_A - np.eye(len(dyn_A))) + np.matmul(dyn_B,K))/dt
@@ -396,10 +449,12 @@ class HPolytope(object):
         #Get polytope where the autonomous dynamics are valid
         n = len(state)
         Ap_ = Ad[:,:n] + np.matmul(Ad[:,n:],K)
-        bp_ = bd - np.matmul(Ad[:,n:],d)
+        bp_ = np.matmul(Ad[:,n:],d) + bd
         new_A = np.concatenate((Ap,Ap_),axis=0)
         new_b = np.concatenate((bp,bp_),axis=0) 
-        A,b = self.hyperP_filter(new_A,new_b)
+        A,b,_,_ = self.hyperP_filter(new_A,new_b)
+        A = np.array(A)
+        b = np.array(b)[None].T
 
         return A,b,dyn_Af,dyn_c
 
@@ -414,7 +469,7 @@ class HPolytope(object):
             poly = queue.pop(0)
             undo_queue.append(poly)
             
-            if((np.matmul(poly.A,state) <= poly.b).all()):
+            if((np.matmul(poly.A,state[None].T) <= poly.b).all()):
                 for p in undo_queue: p.flag_visit = False
                 for p in queue: p.flag_visit = False
                 return poly
@@ -463,7 +518,10 @@ class HPolytope(object):
         big_b = np.matmul(diag,big_b)  
     
         lil_C,lil_b,_,_ = self.hyperP_filter(big_C,big_b)
-                
+        lil_C = np.array(lil_C)
+        lil_b = np.array(lil_b)
+        lil_b = lil_b[:,None]
+        
         return lil_C,lil_b
     
     # Given a set of hyperplanes defined by (C,b), this function eliminates redundant
@@ -798,7 +856,7 @@ def learn_dynamics_model(sess,                  #tensorflow sess
             list_b.append(params[i].T)
                 
     return dynamics,list_W,list_b
-
+ 
 # =============================================================================
             
 #This function finds the points lying in the separatig hyperplanes of the piecewise

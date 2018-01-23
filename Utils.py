@@ -366,10 +366,11 @@ class HPolytope(object):
         self.R = VandR[~bool_vec,1:]
         
         #Get (non-trivial) points in each facet and exit facets
-        self.points,self.exit_facets = self.find_facet_points_and_exit_facets()
+        self.points,self.exit_facets = self.find_facet_points_and_exit_facets_()
         self.points = np.concatenate(self.points)
         
-        self.check = (np.abs(np.diagonal(np.matmul(self.A,self.points.T) - self.b)) < 1e-7).all()
+        self.check = (np.abs(np.diagonal(np.matmul(self.A,self.points.T) - self.b)) < 1e-6).all()
+        if not self.check: print(np.abs(np.diagonal(np.matmul(self.A,self.points.T) - self.b)))
         #print(str(self.A))
         #print(str(self.b))
         print(self.check)
@@ -549,7 +550,55 @@ class HPolytope(object):
         
         interior_point = np.mean(interior_point,axis=0)    
         return lil_C,lil_b,inout,interior_point
-    
+
+    def find_facet_points_and_exit_facets_(self):
+        exit_facets = []
+        points = []
+        for i in range(len(self.A)):
+            c_ = self.A[i,None,:]
+            c_n = c_/(np.linalg.norm(c_) + 1e-17)
+            A_ = np.concatenate((self.A,-self.A[i,None,:]),axis=0)
+            b_ = np.concatenate((self.b,-self.b[i,None,:]),axis=0)
+            G = cvx.matrix(A_)
+            h = cvx.matrix(b_)
+            
+            c = cvx.matrix(-np.matmul(c_,self.dyn_A)[0])
+            sol = cvx.solvers.lp(c, G, h)
+            
+            if sol["status"] == "optimal":
+                val = -sol["primal objective"]+np.matmul(c_,self.dyn_b)[0][0]
+                x_s = np.array(sol["x"])
+                
+                if(val > 0):
+                    exit_facets.append(True)
+                else:
+                    exit_facets.append(False)
+            elif sol["status"] == "dual infeasible":
+                print("UNBOUNDED POLYTOPE")
+                exit_facets.append(True)
+                sol_ = cvx.solvers.lp(-c, G, h)
+                x_s = np.array(sol_["x"])
+            else:
+                print('Unkown status')
+                print(sol["status"])
+                print(self.A)
+                print(self.b)
+                print(i)
+                print(self.dyn_A)
+                print(self.dyn_b)
+                
+            v = np.random.normal(size=(1,c_n.shape[1]))
+            alpha = np.inner(c_n[0],v[0])
+            v = v - alpha*c_n
+            beta = np.divide(self.b - np.matmul(self.A,x_s),np.matmul(self.A,v.T)+1e-17)
+            v_mat = np.matmul(v.T,beta.T) + x_s
+            bool_mat = np.matmul(self.A,v_mat) - self.b < 1e-6
+            inters = bool_mat.all(axis=0)
+            mean_beta = np.mean(beta[inters])
+            
+            points.append(x_s.T + mean_beta*v)
+                        
+        return points,exit_facets
         
         
 # AUXILIARY FUNCTIONS =========================================================
@@ -957,8 +1006,5 @@ def hyperplane_construction(dynamics,
         list_normals.append(normal)
         list_biases.append(np.inner(normal,mean))
     return list_normals,list_biases
-            
-        
-    
     
         

@@ -23,7 +23,7 @@ picklefile2 = '/home/vrubies/Research/DLS/saved_net.pkl'
 policies,env = Utils.load_policy_and_env_from_pickle(sess,picklefile_names)
 
 # PARAMETERS for learning the dynamics
-architecture = {"hid_size":10,"num_hid_layers":2,"activation":tf.nn.relu}
+architecture = {"hid_size":20,"num_hid_layers":2,"activation":tf.nn.relu}
 optimizer = tf.train.MomentumOptimizer
 loss_func = tf.losses.mean_squared_error
 total_grad_steps=3000
@@ -34,11 +34,15 @@ l_rate=0.01
 momentum=0.95
 
 #Learn dynamics model of autonomous system
-dynamics = Utils.learn_dynamics_model(sess,env,policies,architecture,optimizer,loss_func,total_grad_steps,
+dynamics,list_W,list_b = Utils.learn_dynamics_model(sess,env,policies,architecture,optimizer,loss_func,total_grad_steps,
                                       traj_len,episodes,batch_size,l_rate,False,momentum)
+list_W_ = [W/np.linalg.norm(W,axis=1,keepdims=True) for W in list_W]
+list_b_ = [b/np.linalg.norm(W,axis=1) for W,b in zip(list_W,list_b)]
+#active_list,Lg,Ll = Utils.get_active_inactive(-np.ones((2,1)),0.05,list_W,list_b,list_W_,list_b_)
 #dynamics = Utils.load_dynamics_model(picklefile2,sess,env,policies,architecture,optimizer,loss_func,total_grad_steps,
 #                                      traj_len,episodes,batch_size,l_rate,False,momentum)
 
+Utils.show_tube(dynamics,-np.ones((2,1)),0.05,5,list_W,list_b,list_W_,list_b_)
 scaling = 1.0
 #Get all weights and biases
 Wb = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='dyn')

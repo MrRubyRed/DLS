@@ -38,7 +38,7 @@ class MlpDynamics(object):
         self.list_Wb = []
 
         for i in range(num_hid_layers):
-            tmp = U.dense(last_out, hid_size, "dynfc%i"%(i+1), weight_init=U.normc_initializer(1.0))
+            tmp = U.dense(last_out, hid_size, "dynfc%i"%(i+1), weight_init=U.normc_initializer(1.0)) #VRR changed
             self.list_Wb.append(tmp)
             last_out = activation(tmp)
         self.prediction = U.dense(last_out, ob_space.shape[0], "dynfinal%i"%(i+1), weight_init=U.normc_initializer(1.0))

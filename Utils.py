@@ -286,7 +286,8 @@ class Polytope_Tree(object):
     def __init__(self,state,policy,dynamics,pW,dW,dt):
         self.root = HPolytope(state,policy,dynamics,pW,dW,dt)
         poly_points = []
-        self.find_all_dynamic_neighbors(self.root,policy,dynamics,pW,dW,dt,0,poly_points)
+        self.find_all_dynamic_neighbors_(self.root,policy,dynamics,pW,dW,dt,0,poly_points)
+        self.all_interior = poly_points
         #ponts = np.concatenate(poly_points,axis=0)
         #plt.scatter(ponts[:-1,0],ponts[:-1,1],c='b')
         #plt.scatter(ponts[-1,0],ponts[-1,1],c='r')
@@ -312,20 +313,56 @@ class Polytope_Tree(object):
                 if tmp_neighbor is None:
                     node.neighbors.append(HPolytope(tmp_point[None].T,policy,dynamics,pW,dW,dt))
                     node.neighbors[-1].neighbors.append(node)
-                else:
-                    node.neighbors.append(tmp_neighbor)
         
         node.neighbors_found = True
         
         for neighbor in node.neighbors:
             if not neighbor.neighbors_found:
-                print("Starting New Search. Current Recursive Depth: " + str(depth) + " || Interior P=" + str(neighbor.interior_point) +" || Contains Rays = " + str(len(neighbor.R)>0) + " || " + str(flag))
+                print("Starting New Search. Current Recursive Depth: " + str(depth) + " || Interior P=" + str(neighbor.interior_point) +" || " + str(flag))
                 self.find_all_dynamic_neighbors(neighbor,policy,dynamics,pW,dW,dt,depth+1,poly_points)
         
         print("All neighbors found at a depth="+str(depth))
-        
-    def check_invariance(self,state,steps,policy,dynamics,pW,dW,dt):
-        checks = []
+
+    def find_all_dynamic_neighbors_(self,node,policy,dynamics,pW,dW,dt,depth,poly_points):
+        poly_points.append(node.interior_point)
+        queue = []
+        queue.append(node)
+
+        while queue:
+
+            node = queue.pop(0)
+
+            flag = False
+            for i in range(len(node.exit_facets)):
+                if node.exit_facets[i]:
+                    tmp_point = np.copy(node.points[i])
+                    while np.inner(node.A[i,:],tmp_point) <= node.b[i][0]:
+                        tmp_point += 1e-8*node.A[i,:]
+                        flag = True
+                    tmp_neighbor = node.check_if_in_union_BFS(tmp_point)
+                    if tmp_neighbor is None:
+                        node.neighbors.append(HPolytope(tmp_point[None].T,policy,dynamics,pW,dW,dt))
+                        node.neighbors[-1].neighbors.append(node)
+                        checking = (np.linalg.norm(node.neighbors[-1].V,ord=np.inf,axis=1) < 10.0)
+                        if(checking.all()):
+                            queue.append(node.neighbors[-1])
+                        else:
+                            node.neighbors[-1].neighbors_found = True
+            
+            node.neighbors_found = True
+            poly_points.append(node.interior_point)
+            
+            ponts = np.concatenate(poly_points,axis=0)
+            plt.clf()
+            plt.scatter(ponts[:-1,0],ponts[:-1,1],c='b')
+            plt.scatter(ponts[-1,0],ponts[-1,1],c='r')
+            plt.show()
+            plt.pause(0.01)
+            
+            print("Starting New Search. Current Queue Length: " + str(len(queue)) + " || Interior P=" + str(node.interior_point) +" || " + str(np.sum(~np.array(node.exit_facets))))
+
+
+    def check_invariance(self,state,steps,policy,dynamics):
         traj=[]
         new_state = np.copy(state)
         traj.append(new_state)
@@ -333,16 +370,37 @@ class Polytope_Tree(object):
         for i in range(steps):
             new_state = dynamics.step(new_state,policy.act(False,new_state)[0])[0][0]
             traj.append(new_state)
-            node = node.check_if_in_union_BFS(state)
+            node = node.check_if_in_union_BFS(new_state)
             if(node is None):
-                checks.append(False)
-            else:
-                checks.append(True)
+                print("Exited Union")
+                traj = np.array(traj)
+                plt.scatter(traj[:,0],traj[:,1],c='g')
+                plt.pause(0.01)
+                return traj
         traj = np.array(traj)
         plt.scatter(traj[:,0],traj[:,1],c='g')
         plt.pause(0.01)
-        return checks
-        
+        return traj
+
+def simulate_dynamics(state,steps,policy,dynamics):
+    #checks = []
+    traj=[]
+    new_state = np.copy(state)
+    #traj.append(new_state)
+    #node = self.root
+    for i in range(steps):
+        new_state = dynamics.step(new_state,policy.act(False,new_state)[0])[0][0]
+        traj.append(new_state)
+        #node = node.check_if_in_union_BFS(state)
+        #if(node is None):
+        #    checks.append(False)
+        #else:
+        #    checks.append(True)
+    traj = np.array(traj)
+    #plt.scatter(traj[:,0],traj[:,1],c='g')
+    #plt.pause(0.01)
+    return traj
+
 class HPolytope(object):
     
     def __init__(self,state,policy,dynamics,pW,dW,dt):
@@ -366,14 +424,13 @@ class HPolytope(object):
         self.R = VandR[~bool_vec,1:]
         
         #Get (non-trivial) points in each facet and exit facets
-        self.points,self.exit_facets = self.find_facet_points_and_exit_facets_()
-        self.points = np.concatenate(self.points)
-        
+        self.points,self.exit_facets,tp = self.find_facet_points_and_exit_facets()
+        self.points = np.concatenate(self.points)     
         self.check = (np.abs(np.diagonal(np.matmul(self.A,self.points.T) - self.b)) < 1e-6).all()
         if not self.check: print(np.abs(np.diagonal(np.matmul(self.A,self.points.T) - self.b)))
         #print(str(self.A))
         #print(str(self.b))
-        print(self.check)
+        print(str(self.check) + " _ " + str(tp) + "_" + str(np.linalg.eigvals(self.dyn_A)))
         #print(str(self.points))
         self.interior_point = np.mean(self.points,axis=0,keepdims=True)
 
@@ -425,12 +482,12 @@ class HPolytope(object):
                 else:
                     exit_facets.append(True)
             
-        return points,exit_facets            
+        return points,exit_facets,(0,0,0)           
                 
     def get_polytope(self,state,policy,dynamics,pW,dW,dt):
         list_Wp,list_bp = pW                                    #Unpack weightd and biases for the policy
         Ap,bp = self.get_region(list_Wp,list_bp,state)          #Get H-representation Polytope for state
-        K = policy.get_Jacobian(state.T)[0][0]                  #Get K (from u = Kx + d) [Takes in np.arrat.shape = (1,n)] [returns np.array.spahe = (k,n,n)]
+        K = policy.get_Jacobian(state.T)[0][0].T                #Get K (from u = Kx + d) [Takes in np.arrat.shape = (1,n)] [returns np.array.spahe = (k,n,n)]
         d = policy.act(False,state.T[0])[0][None].T - np.matmul(K,state) #Get d (from u = Kx + d) [Takes in np.arrat.shape = (n,)] [returns (np.array.shape=(n,),float)]
         
         action = np.matmul(K,state)+d                           #Get action
@@ -439,8 +496,8 @@ class HPolytope(object):
         Ad,bd = self.get_region(list_Wd,list_bd,state_action)   #Get H-representation Polytope for state-action
         
         dyn_A,dyn_B = dynamics.get_Jacobian(state.T[0],action.T[0])       #Get dynamic matrices
-        dyn_A = dyn_A[0]
-        dyn_B = dyn_B[0]
+        dyn_A = dyn_A[0].T
+        dyn_B = dyn_B[0].T
         c = dynamics.step(state.T[0],action.T[0])[0].T - np.matmul(dyn_A,state) - np.matmul(dyn_B,action) #Get dynamic bias
         
         # Generate (CONTINUOUS TIME) autonomous dynamics model
@@ -553,6 +610,8 @@ class HPolytope(object):
 
     def find_facet_points_and_exit_facets_(self):
         exit_facets = []
+        enter_facets = []
+        mixed_facets = []
         points = []
         for i in range(len(self.A)):
             c_ = self.A[i,None,:]
@@ -562,22 +621,52 @@ class HPolytope(object):
             G = cvx.matrix(A_)
             h = cvx.matrix(b_)
             
-            c = cvx.matrix(-np.matmul(c_,self.dyn_A)[0])
+            c = cvx.matrix(np.matmul(c_,self.dyn_A)[0])
+            _c = cvx.matrix(np.matmul(-c_,self.dyn_A)[0])
             sol = cvx.solvers.lp(c, G, h)
+            sol_ = cvx.solvers.lp(_c,G,h)
             
-            if sol["status"] == "optimal":
-                val = -sol["primal objective"]+np.matmul(c_,self.dyn_b)[0][0]
+            if sol["status"] == "optimal" and sol_["status"] == "optimal":
+                val = sol["primal objective"]+np.matmul(c_,self.dyn_b)[0][0]
+                val_ = sol_["primal objective"]+np.matmul(-c_,self.dyn_b)[0][0]
                 x_s = np.array(sol["x"])
                 
                 if(val > 0):
                     exit_facets.append(True)
+                    enter_facets.append(False)
+                    mixed_facets.append(False)
+                elif(val_ > 0):
+                    exit_facets.append(False)
+                    enter_facets.append(True)
+                    mixed_facets.append(False) #It contains at least one state that enters
                 else:
                     exit_facets.append(False)
-            elif sol["status"] == "dual infeasible":
+                    enter_facets.append(False)
+                    mixed_facets.append(True) #It contains at least one state that enters                    
+            elif sol["status"] == "dual infeasible" and sol_["status"] == "optimal":
                 print("UNBOUNDED POLYTOPE")
-                exit_facets.append(True)
-                sol_ = cvx.solvers.lp(-c, G, h)
+                val_ = sol_["primal objective"]+np.matmul(-c_,self.dyn_b)[0][0]
                 x_s = np.array(sol_["x"])
+                if(val_ > 0):
+                    exit_facets.append(False)
+                    enter_facets.append(True)
+                    mixed_facets.append(False) #It contains at least one state that enters
+                else:
+                    exit_facets.append(False)
+                    enter_facets.append(False)
+                    mixed_facets.append(True) #It contains at least one state that enters
+            elif sol_["status"] == "dual infeasible" and sol["status"] == "optimal":
+                print("UNBOUNDED POLYTOPE")
+                val = sol["primal objective"]+np.matmul(c_,self.dyn_b)[0][0]
+                x_s = np.array(sol["x"])
+                if(val > 0):
+                    exit_facets.append(False)
+                    enter_facets.append(True)
+                    mixed_facets.append(False) #It contains at least one state that enters
+                else:
+                    exit_facets.append(False)
+                    enter_facets.append(False)
+                    mixed_facets.append(True) #It contains at least one state that enters                
             else:
                 print('Unkown status')
                 print(sol["status"])
@@ -594,11 +683,17 @@ class HPolytope(object):
             v_mat = np.matmul(v.T,beta.T) + x_s
             bool_mat = np.matmul(self.A,v_mat) - self.b < 1e-6
             inters = bool_mat.all(axis=0)
+            inters[i] = False
             mean_beta = np.mean(beta[inters])
+            #if(len(beta[inters]) != 2): print('Error: More than two intersections'+' ('+str(beta[inters])+')')
             
             points.append(x_s.T + mean_beta*v)
-                        
-        return points,exit_facets
+            
+        possible_exits = [a or b for a,b in zip(exit_facets,mixed_facets)] 
+        ef = np.sum(exit_facets)
+        enf = np.sum(enter_facets)
+        mf = np.sum(mixed_facets)           
+        return points,possible_exits,(ef,enf,mf)
         
         
 # AUXILIARY FUNCTIONS =========================================================
@@ -905,7 +1000,51 @@ def learn_dynamics_model(sess,                  #tensorflow sess
             list_b.append(params[i].T)
                 
     return dynamics,list_W,list_b
- 
+
+#TODO: Account for the fact that getting deeper layer L-constants is not trivial
+def get_active_inactive(c,r,list_W,list_b,list_W_,list_b_): 
+    Lg = 1.0
+    Ll = 1.0
+    active_list = []
+    for i in range(len(list_W)-1):
+        W_ = list_W_[i]
+        b_ = list_b_[i]
+        W = list_W[i]
+        b = list_b[i]
+        tmp = (np.matmul(W,c) + b[None].T) > 0
+        tmp2 = np.abs(np.matmul(W_,c) + b_[None].T) < r
+        tmp3 = tmp | tmp2
+        active_list.append(tmp3)
+        
+        dig_ = np.diag(np.array([int(j) for j in tmp3.T[0]]))
+        _,V,_ = np.linalg.svd(W)
+        _,V_,_ = np.linalg.svd(np.matmul(dig_,W))
+        print("Gone from the max S. Value " + str(V[0]) + " to " + str(V_[0]) + "for layer " + str(i))
+        Lg = Lg*V[0]
+        Ll = Ll*V_[0]
+        
+        dig = np.diag(np.array([int(j) for j in tmp.T[0]]))
+        c = np.matmul(dig,np.matmul(W,c) + b[None].T)
+        r = V_[0]*r
+    
+    _,V,_ = np.linalg.svd(list_W[-1])    
+    Ll = Ll*V[0]
+        
+    return active_list,Lg,Ll
+
+def show_tube(dynamics,c,r,T,list_W,list_b,list_W_,list_b_):
+    fig, ax = plt.subplots()
+    ax.set_xlim((-5, 5))
+    ax.set_ylim((-5, 5))
+    
+    for t in range(T):
+        circle = plt.Circle((c[0,0],c[1,0]), r, color='b')
+        ax.add_artist(circle)
+        
+        active_list,Lg,Ll = get_active_inactive(c,r,list_W,list_b,list_W_,list_b_)
+        c = dynamics.step(c.T[0])[0].T
+        r = r*Ll
+        plt.pause(3)
 # =============================================================================
             
 #This function finds the points lying in the separatig hyperplanes of the piecewise

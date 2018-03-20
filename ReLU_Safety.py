@@ -13,7 +13,7 @@ sess.__enter__()
 
 #Experiment Directory
 directory = "/home/vrubies/Research/baselines/baselines/trpo_mpi/experiments/"
-environ = "PointMass-v0"
+environ = "PointMass-v1"
 
 #Name of the pickle file
 picklefile_names = os.listdir(path=directory)
@@ -24,11 +24,11 @@ picklefile2 = '/home/vrubies/Research/DLS/saved_net.pkl'
 policies,env = Utils.load_policy_and_env_from_pickle(sess,picklefile_names)
 
 # PARAMETERS for learning the dynamics
-architecture = {"hid_size":20,"num_hid_layers":2,"activation":tf.nn.relu}
+architecture = {"hid_size":10,"num_hid_layers":2,"activation":tf.nn.relu}
 optimizer = tf.train.MomentumOptimizer
 loss_func = tf.losses.mean_squared_error
 total_grad_steps=10000
-traj_len=75
+traj_len=100
 episodes=100
 batch_size=20
 l_rate=0.01
@@ -39,7 +39,7 @@ dynamics,list_Wd,list_bd = Utils.learn_dynamics_model(sess,env,policies,architec
                                       traj_len,episodes,batch_size,l_rate,True,momentum)
 dW = (list_Wd,list_bd)
 
-policy = policies[-2]
+policy = policies[-1]
 params = sess.run([v for v in policy.get_trainable_variables() if "pol" in v.name])
 list_Wp = []
 list_bp = []
@@ -50,7 +50,9 @@ for i in range(len(params)):
         list_bp.append(params[i].T)
 pW = (list_Wp,list_bp)
 
-PT=Utils.Polytope_Tree(np.array([[-1.0,0.0]]).T,policy,dynamics,pW,dW,0.01)
+traj = Utils.simulate_dynamics(np.array([1.0,-1.0,0.0,0.0]),2000,policy,dynamics)
+print(traj)
+PT=Utils.Polytope_Tree(traj[-1,None,:].T,policy,dynamics,pW,dW,0.01)
 #M,b = Utils.get_region(list_W,list_b,np.array([[4.0],[4.0],[0.0],[0.0]]))
 #M = np.array(M)
 #b = -np.array(b)[None].T       

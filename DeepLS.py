@@ -36,6 +36,11 @@ momentum=0.95
 #Learn dynamics model of autonomous system
 dynamics,list_W,list_b = Utils.learn_dynamics_model(sess,env,policies,architecture,optimizer,loss_func,total_grad_steps,
                                       traj_len,episodes,batch_size,l_rate,False,momentum)
+A = np.array([[1,0],[-1,0],[0,1],[0,-1]])
+b = np.array([[1.5],[-1.0],[.5],[.5]])
+for k in range(10):
+    initial_set = (A,b)
+    A,b = Utils.compute_supporting_planes(list_W,list_b,initial_set,num_planes=4,draw=True)
 list_W_ = [W/np.linalg.norm(W,axis=1,keepdims=True) for W in list_W]
 list_b_ = [b/np.linalg.norm(W,axis=1) for W,b in zip(list_W,list_b)]
 #active_list,Lg,Ll = Utils.get_active_inactive(-np.ones((2,1)),0.05,list_W,list_b,list_W_,list_b_)

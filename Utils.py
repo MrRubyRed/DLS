@@ -1045,6 +1045,105 @@ def show_tube(dynamics,c,r,T,list_W,list_b,list_W_,list_b_):
         c = dynamics.step(c.T[0])[0].T
         r = r*Ll
         plt.pause(3)
+
+def generate_constraints_and_vars(list_W,list_b,variables,constraints):
+    log = []
+    var_in = []
+    var_out = variables
+    for i in range(len(list_W)):
+        W = list_W[i]
+        b = list_b[i]
+        N = W.shape[0]
+        upper = np.zeros((N,))
+        lower = np.zeros((N,))
+        for j in range(len(W)):
+            objective_max = cvxpy.Maximize(W[[j],:]*var_out[-1])
+            objective_min = cvxpy.Minimize(W[[j],:]*var_out[-1])
+            
+            prob_max = cvxpy.Problem(objective_max,constraints)
+            prob_min = cvxpy.Problem(objective_min,constraints)
+            
+            tmp_max = prob_max.solve()
+            #tmp_max = np.array(tmp.value)
+            tmp_min = prob_min.solve()
+            #tmp_min = np.array(tmp.value)
+            
+            upper[j] = tmp_max + b[j]
+            lower[j] = tmp_min + b[j]
+        
+        log.append((lower,upper))
+        lower  = np.array([min([0,tmp]) for tmp in lower])
+        upper  = np.array([max([0,tmp]) for tmp in upper])
+        print("Upper-Lower: " + str(min(np.abs(upper-lower))))
+        if(min(np.abs(upper-lower)) == np.inf):
+            print("Whoops..")
+        A_ = np.diag(upper/(upper-lower))
+        var_in.append(W*var_out[-1] + b[None].T)
+        var_out.append(cvxpy.Variable(N,1))
+        constraints.append(var_out[-1] >= 0)
+        constraints.append(var_out[-1] >= var_in[-1])
+        constraints.append(var_out[-1] <= A_*var_in[-1] - np.matmul(A_,lower[None].T)) #TODO check this constaint
+    return var_in[-1]
+            
+        
+def compute_supporting_planes(list_W,list_b,initial_set,num_planes=None, draw=False):
+    N = list_W[0].shape[1]
+    if num_planes == None:
+        num_planes = N+1
+
+    H = np.zeros((num_planes,N))
+    B = np.zeros((num_planes,1))
+
+    constraints = []
+    variables = []
+    
+    x = cvxpy.Variable(N,1)
+    variables.append(x)
+    
+    A,b = initial_set
+    constraints.append(A*x <= b)
+    
+    v = generate_constraints_and_vars(list_W,list_b,variables,constraints)
+
+    ang = 2*np.pi/num_planes
+    for i in range(num_planes):
+        l = np.array([[np.cos(ang + ang*i),np.sin(ang + ang*i)]])#np.random.multivariate_normal(np.zeros((N,)),np.eye(N),size=(1,))
+        #l = l/np.linalg.norm(l)
+        objective = cvxpy.Maximize(l*v)
+
+        prob = cvxpy.Problem(objective,constraints)
+        result = prob.solve()#solver=cvxpy.CVXOPT)#, verbose=True)
+    
+        h = l
+        H[[i],:] = h
+        B[i,0] = result
+        
+        if draw:
+            graph_plane(h,result)
+            
+        x_support = np.array(variables[-1].value)
+        #print(x_support)
+    
+    #Ab = np.concatenate((H,B),axis=1)
+    plt.xlim((-10,10))
+    plt.ylim((-10,10))    
+    plt.pause(1.0)
+    plt.clf()
+    return H,B#convert_HtoV(H,B),convert_HtoV(H,-B)
+
+def graph_plane(h,b):
+    x = np.arange(-10.0, 10.0, 0.5)
+    plt.plot(x, (b - h[0,0]*x)/h[0,1], color='blue')
+    plt.show()
+
+def convert_HtoV(A,b):
+    M = np.concatenate((b,A),axis=1)
+    mat = cdd.Matrix(M, number_type='float')
+    mat.rep_type = cdd.RepType.INEQUALITY
+    poly = cdd.Polyhedron(mat)
+    ext = poly.get_generators()
+    ext = np.array(ext)
+    return ext        
 # =============================================================================
             
 #This function finds the points lying in the separatig hyperplanes of the piecewise

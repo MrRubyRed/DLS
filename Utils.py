@@ -1046,47 +1046,50 @@ def show_tube(dynamics,c,r,T,list_W,list_b,list_W_,list_b_):
         r = r*Ll
         plt.pause(3)
 
-def generate_constraints_and_vars(list_W,list_b,variables,constraints):
+def generate_constraints_and_vars(T,list_W,list_b,variables,constraints):
     log = []
     var_in = []
     var_out = variables
-    for i in range(len(list_W)):
-        W = list_W[i]
-        b = list_b[i]
-        N = W.shape[0]
-        upper = np.zeros((N,))
-        lower = np.zeros((N,))
-        for j in range(len(W)):
-            objective_max = cvxpy.Maximize(W[[j],:]*var_out[-1])
-            objective_min = cvxpy.Minimize(W[[j],:]*var_out[-1])
+    for _ in range(T):
+        for i in range(len(list_W)):
+            W = list_W[i]
+            b = list_b[i]
+            N = W.shape[0]
+            upper = np.zeros((N,))
+            lower = np.zeros((N,))
+            for j in range(len(W)):
+                objective_max = cvxpy.Maximize(W[[j],:]*var_out[-1])
+                objective_min = cvxpy.Minimize(W[[j],:]*var_out[-1])
+                
+                prob_max = cvxpy.Problem(objective_max,constraints)
+                prob_min = cvxpy.Problem(objective_min,constraints)
+                
+                tmp_max = prob_max.solve()
+                #tmp_max = np.array(tmp.value)
+                tmp_min = prob_min.solve()
+                #tmp_min = np.array(tmp.value)
+                
+                upper[j] = tmp_max + b[j]
+                lower[j] = tmp_min + b[j]
             
-            prob_max = cvxpy.Problem(objective_max,constraints)
-            prob_min = cvxpy.Problem(objective_min,constraints)
-            
-            tmp_max = prob_max.solve()
-            #tmp_max = np.array(tmp.value)
-            tmp_min = prob_min.solve()
-            #tmp_min = np.array(tmp.value)
-            
-            upper[j] = tmp_max + b[j]
-            lower[j] = tmp_min + b[j]
-        
-        log.append((lower,upper))
-        lower  = np.array([min([0,tmp]) for tmp in lower])
-        upper  = np.array([max([0,tmp]) for tmp in upper])
-        print("Upper-Lower: " + str(min(np.abs(upper-lower))))
-        if(min(np.abs(upper-lower)) == np.inf):
-            print("Whoops..")
-        A_ = np.diag(upper/(upper-lower))
-        var_in.append(W*var_out[-1] + b[None].T)
-        var_out.append(cvxpy.Variable(N,1))
-        constraints.append(var_out[-1] >= 0)
-        constraints.append(var_out[-1] >= var_in[-1])
-        constraints.append(var_out[-1] <= A_*var_in[-1] - np.matmul(A_,lower[None].T)) #TODO check this constaint
+            log.append((lower,upper))
+            lower  = np.array([min([0,tmp]) for tmp in lower])
+            upper  = np.array([max([0,tmp]) for tmp in upper])
+            print("Upper-Lower: " + str(min(np.abs(upper-lower))))
+            if(min(np.abs(upper-lower)) == np.inf):
+                print("Whoops..")
+            A_ = np.diag(upper/(upper-lower))
+            var_in.append(W*var_out[-1] + b[None].T)
+            if(j != len(list_W)-1):
+                var_out.append(cvxpy.Variable(N,1))
+                constraints.append(var_out[-1] >= 0)
+                constraints.append(var_out[-1] >= var_in[-1])
+                constraints.append(var_out[-1] <= A_*var_in[-1] - np.matmul(A_,lower[None].T)) #TODO check this constaint
+        var_out.append(var_in[-1])
     return var_in[-1]
             
         
-def compute_supporting_planes(list_W,list_b,initial_set,num_planes=None, draw=False):
+def compute_supporting_planes(T,list_W,list_b,initial_set,num_planes=None, draw=False):
     N = list_W[0].shape[1]
     if num_planes == None:
         num_planes = N+1
@@ -1103,7 +1106,7 @@ def compute_supporting_planes(list_W,list_b,initial_set,num_planes=None, draw=Fa
     A,b = initial_set
     constraints.append(A*x <= b)
     
-    v = generate_constraints_and_vars(list_W,list_b,variables,constraints)
+    v = generate_constraints_and_vars(T,list_W,list_b,variables,constraints)
 
     ang = 2*np.pi/num_planes
     for i in range(num_planes):
@@ -1131,9 +1134,9 @@ def compute_supporting_planes(list_W,list_b,initial_set,num_planes=None, draw=Fa
     plt.clf()
     return H,B#convert_HtoV(H,B),convert_HtoV(H,-B)
 
-def graph_plane(h,b):
-    x = np.arange(-10.0, 10.0, 0.5)
-    plt.plot(x, (b - h[0,0]*x)/h[0,1], color='blue')
+def graph_plane(h,b,c='blue',alph=1.0):
+    x = np.arange(-8.0, 8.0, 0.5)
+    plt.plot(x, (b - h[0,0]*x)/h[0,1], color=c, alpha=alph)
     plt.show()
 
 def convert_HtoV(A,b):

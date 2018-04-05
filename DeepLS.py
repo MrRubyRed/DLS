@@ -16,7 +16,7 @@ environ = "PointMass-v0"
 
 #Name of the pickle file
 picklefile_names = os.listdir(path=directory)
-picklefile_names = [directory+name for name in picklefile_names if environ+"_2018-01-12 14" in name]
+picklefile_names = [directory+name for name in picklefile_names if environ+"_2018-01-12 15:35" in name]
 picklefile2 = '/home/vrubies/Research/DLS/saved_net.pkl'
 
 #Load pre-trained policy and get environment
@@ -41,7 +41,7 @@ b = np.array([[2.8],[-2.0],[2.8],[-2.0]])
 #b = np.array([[0.5],[0.5],[0.5],[0.5]])
 for k in range(10):
     initial_set = (A,b)
-    A,b = Utils.compute_supporting_planes(1,list_W,list_b,initial_set,num_planes=10,draw=True)
+    A,b = Utils.compute_supporting_planes(1,list_W,list_b,initial_set,num_planes=40,draw=True)
 list_W_ = [W/np.linalg.norm(W,axis=1,keepdims=True) for W in list_W]
 list_b_ = [b/np.linalg.norm(W,axis=1) for W,b in zip(list_W,list_b)]
 #active_list,Lg,Ll = Utils.get_active_inactive(-np.ones((2,1)),0.05,list_W,list_b,list_W_,list_b_)

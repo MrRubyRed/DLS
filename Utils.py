@@ -1075,7 +1075,7 @@ def generate_constraints_and_vars(T,list_W,list_b,variables,constraints):
             log.append((lower,upper))
             lower  = np.array([min([0,tmp]) for tmp in lower])
             upper  = np.array([max([0,tmp]) for tmp in upper])
-            print("Upper-Lower: " + str(min(np.abs(upper-lower))))
+            print("Upper-Lower: " + str(max(np.abs(upper-lower))))
             if(min(np.abs(upper-lower)) == np.inf):
                 print("Whoops..")
             A_ = np.diag(upper/(upper-lower))

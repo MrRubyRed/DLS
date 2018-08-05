@@ -1,4 +1,4 @@
-import Utils
+import reachable_computation as Utils
 import baselines.common.tf_util as U
 import numpy as np
 import tensorflow as tf
@@ -11,8 +11,8 @@ sess = U.single_threaded_session()
 sess.__enter__()
 
 #Experiment Directory
-directory = "/home/vrubies/Research/baselines/baselines/trpo_mpi/experiments/"
-environ = "PointMass-v0"
+directory = "/home/vrubies/Documents/Research/baselines/baselines/trpo_mpi/experiments/"
+environ = "LinearSystem-v0"
 
 #Name of the pickle file
 picklefile_names = os.listdir(path=directory)
@@ -20,14 +20,14 @@ picklefile_names = [directory+name for name in picklefile_names if environ+"_201
 picklefile2 = '/home/vrubies/Research/DLS/saved_net.pkl'
 
 #Load pre-trained policy and get environment
-policies,env = Utils.load_policy_and_env_from_pickle(sess,picklefile_names)
+policies,env = Utils.load_policy_and_env_from_pickle(sess,environ,picklefile_names)
 
 # PARAMETERS for learning the dynamics
-architecture = {"hid_size":20,"num_hid_layers":2,"activation":tf.nn.relu}
+architecture = {"hid_size":5,"num_hid_layers":2,"activation":tf.nn.relu}
 optimizer = tf.train.MomentumOptimizer
 loss_func = tf.losses.mean_squared_error
 total_grad_steps=3000
-traj_len=100
+traj_len=20
 episodes=40
 batch_size=10
 l_rate=0.01
@@ -37,11 +37,10 @@ momentum=0.95
 dynamics,list_W,list_b = Utils.learn_dynamics_model(sess,env,policies,architecture,optimizer,loss_func,total_grad_steps,
                                       traj_len,episodes,batch_size,l_rate,False,momentum)
 A = np.array([[1,0],[-1,0],[0,1],[0,-1]])
-b = np.array([[2.8],[-2.0],[2.8],[-2.0]])
-#b = np.array([[0.5],[0.5],[0.5],[0.5]])
-for k in range(10):
+b = -np.array([-3.5,3.0,-.5,-.5])
+for k in range(20):
     initial_set = (A,b)
-    A,b = Utils.compute_supporting_planes(1,list_W,list_b,initial_set,num_planes=40,draw=True)
+    A,b = Utils.compute_supporting_planes(list_W,list_b,initial_set,num_planes=20,draw=True)
 list_W_ = [W/np.linalg.norm(W,axis=1,keepdims=True) for W in list_W]
 list_b_ = [b/np.linalg.norm(W,axis=1) for W,b in zip(list_W,list_b)]
 #active_list,Lg,Ll = Utils.get_active_inactive(-np.ones((2,1)),0.05,list_W,list_b,list_W_,list_b_)
